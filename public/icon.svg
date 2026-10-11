@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="distroGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="url(#distroGrad)"/>
+  <path d="M160 160h192v64H160zM160 256h192v64H160zM160 352h128v64H160z" fill="#ffffff" fill-opacity="0.9"/>
+  <circle cx="340" cy="384" r="36" fill="#34d399"/>
+</svg>

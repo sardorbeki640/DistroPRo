@@ -1,0 +1,8 @@
+{
+  "name": "Dstro pro Moliya tizimi",
+  "description": "Enterprise distribution financial management platform with multi-tenant cash day control, RBAC, transaction audit, and integration adapters.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

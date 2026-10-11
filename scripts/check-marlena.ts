@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import {SalesDocAdapter} from '../server/integrations/adapters/salesdoc.adapter.ts';
+const d=JSON.parse(fs.readFileSync('.data/finance_db.json','utf8'));
+const config=d.integrations.find((i:any)=>i.provider_name==='SALESDOC').config;
+const a=new SalesDocAdapter();
+const end=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Tashkent'});
+const start=new Date(Date.parse(end+'T00:00:00Z')-99*86400000).toISOString().slice(0,10);
+const products=await a.importProducts(config);
+const orders=await a.importOrders(config,{dateFrom:start,dateTo:end,status:[3,4]});
+console.log(JSON.stringify({start,end,count:orders.length,products:products.filter(p=>/marlena|марлена/i.test(p.name)).map(p=>{const q=orders.flatMap(o=>o.items||[]).filter(i=>String(i.sku)===String(p.sku)).reduce((s,i)=>s+i.quantity,0);return {name:p.name,sku:p.sku,stock:p.stock_quantity,quantity:q,daily:q/100,days:q>0?p.stock_quantity/(q/100):null};})},null,2));

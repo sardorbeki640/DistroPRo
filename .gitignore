@@ -1,0 +1,21 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Business database: customers, balances and the SalesDoc login. Never commit.
+.data/
+
+.test-runs/
+verified-tests/
+repair-tests/
+review-tests/
+*.log
+.env.local
+
+
+runtime/
