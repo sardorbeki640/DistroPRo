@@ -39,7 +39,7 @@ export function runDueSyncs(now = Date.now()): string[] {
       started.push(integration.id);
     } else if (adapter.providerType === 'DISTRIBUTION' && !genericRunning.has(integration.id)) {
       genericRunning.add(integration.id);
-      integrationProvider.syncProvider(integration.company_id, integration.provider_name, 'system-scheduler', 'system')
+      integrationProvider.syncProvider(integration.company_id, integration.provider_name, 'system-scheduler', 'system', integration.id)
         .catch(err => console.warn('[Scheduler]', integration.provider_name, err.message))
         .finally(() => genericRunning.delete(integration.id));
       started.push(integration.id);

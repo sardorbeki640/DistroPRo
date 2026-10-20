@@ -385,7 +385,7 @@ export class ForecastService {
       message = running ? `${dist.name} yuklanishi davom etmoqda.` : `${dist.name} qoldiqlari va oxirgi buyurtmalar fonda yangilanmoqda. Bir necha daqiqadan keyin sahifani yangilang.`;
       syncRes = { background: true };
     } else {
-      syncRes = await integrationProvider.syncProvider(companyId, provider, userId, userEmail);
+      syncRes = await integrationProvider.syncProvider(companyId, provider, userId, userEmail, integration.id);
       message = syncRes.status === 'FAILED' ? `${provider} yangilanmadi: ${(syncRes.errors || []).join('; ')}` : `${provider}: ${syncRes.recordsImported} ta yozuv yangilandi, ${syncRes.recordsFailed} ta o‘tkazib yuborildi.`;
     }
 

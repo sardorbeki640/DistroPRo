@@ -109,7 +109,7 @@ export const CashRegistryTable: React.FC<CashRegistryTableProps> = ({
       const grp = map.get(agId) || { agentName: agName, agentId: agId, items: [], totalSales: 0, totalCash: 0, totalDebt: 0 };
       grp.items.push(it);
       grp.totalSales += it.sale_amount || 0;
-      grp.totalCash += (it.cash_payment || 0) + (it.uy_oplata || 0);
+      grp.totalCash += (it.cash_payment || 0);
       grp.totalDebt += it.remaining_debt || 0;
       map.set(agId, grp);
     }
@@ -283,10 +283,9 @@ export const CashRegistryTable: React.FC<CashRegistryTableProps> = ({
                     Контрагент
                   </th>
 
-                  {/* Other 9 columns */}
+                  {/* Other 8 columns */}
                   <th className="py-3 px-3 text-right min-w-[105px] bg-indigo-950/70">Сумма (Sotuv)</th>
                   <th className="py-3 px-3 text-right min-w-[100px] bg-emerald-950/70">Оплата</th>
-                  <th className="py-3 px-3 text-right min-w-[95px]">Уй оплата</th>
                   <th className="py-3 px-3 text-right min-w-[110px] bg-amber-950/60">Насия ва переч</th>
                   <th className="py-3 px-3 text-right min-w-[105px]">Насиядан кирим</th>
                   <th className="py-3 px-3 text-right min-w-[90px]">Возврать</th>
@@ -300,7 +299,7 @@ export const CashRegistryTable: React.FC<CashRegistryTableProps> = ({
               <tbody className="divide-y divide-neutral-100 font-medium text-neutral-800">
                 {items.length === 0 ? (
                   <tr>
-                    <td colSpan={13} className="py-12 text-center text-neutral-400">
+                    <td colSpan={12} className="py-12 text-center text-neutral-400">
                       Ushbu sanada reestr yozuvlari topilmadi.
                     </td>
                   </tr>
@@ -377,10 +376,7 @@ export const CashRegistryTable: React.FC<CashRegistryTableProps> = ({
                         {/* 2. Oplata */}
                         {renderEditableCell('cash_payment', item.cash_payment || 0, 'bg-emerald-50/20', 'font-semibold text-emerald-700')}
 
-                        {/* 3. Uy oplata */}
-                        {renderEditableCell('uy_oplata', item.uy_oplata || 0, '', 'text-neutral-700')}
-
-                        {/* 4. Nasiya va perech */}
+                        {/* 3. Nasiya va perech */}
                         {renderEditableCell('nasiya_perech', item.nasiya_perech || 0, 'bg-amber-50/20', 'font-medium text-amber-700')}
 
                         {/* 5. Nasiyadan kirim */}
@@ -562,14 +558,10 @@ export const CashRegistryTable: React.FC<CashRegistryTableProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-4 gap-1.5 p-2 bg-neutral-50 rounded-xl text-center text-[10px]">
+              <div className="grid grid-cols-3 gap-1.5 p-2 bg-neutral-50 rounded-xl text-center text-[10px]">
                 <div>
                   <span className="text-neutral-400 block">Оплата</span>
                   <span className="font-bold text-emerald-700">{formatAmount(item.cash_payment)}</span>
-                </div>
-                <div>
-                  <span className="text-neutral-400 block">Уй</span>
-                  <span className="font-bold text-neutral-700">{formatAmount(item.uy_oplata)}</span>
                 </div>
                 <div>
                   <span className="text-neutral-400 block">Насия</span>

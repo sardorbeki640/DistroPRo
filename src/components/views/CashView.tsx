@@ -100,6 +100,9 @@ export const CashView: React.FC<CashViewProps> = ({
   const [selectedAgent, setSelectedAgent] = useState<string>('');
   const [selectedCustomer, setSelectedCustomer] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [serverFilter, setServerFilter] = useState('');
+  const [serverOptions, setServerOptions] = useState<any[]>([]);
+  useEffect(() => { api.getIntegrations().then(r => setServerOptions(r.integrations || [])).catch(() => {}); }, []);
   const [quickFilter, setQuickFilter] = useState<'ALL' | 'DEBTORS' | 'CASH' | 'RETURNS'>('ALL');
 
   // Security Director PIN modal for reopening closed days
@@ -142,7 +145,6 @@ export const CashView: React.FC<CashViewProps> = ({
     customer_id: '',
     sale_amount: '',
     cash_payment: '',
-    uy_oplata: '',
     nasiya_perech: '',
     nasiyadan_kirim: '',
     return_amount: '',
@@ -197,7 +199,8 @@ export const CashView: React.FC<CashViewProps> = ({
         to_date: to || undefined,
         agent_id: picked(selectedAgent).join(',') || undefined,
         customer_id: picked(selectedCustomer).join(',') || undefined,
-        search: searchQuery || undefined
+        search: searchQuery || undefined,
+        integration_id: serverFilter || undefined
       });
 
       setRegistryItems(res.items || []);
@@ -218,7 +221,7 @@ export const CashView: React.FC<CashViewProps> = ({
     if (viewMode === 'detail') {
       fetchRegistry();
     }
-  }, [viewMode, fromDate, toDate, selectedAgent, selectedCustomer, searchQuery]);
+  }, [viewMode, fromDate, toDate, selectedAgent, selectedCustomer, searchQuery, serverFilter]);
 
   const saveDay = async () => {
     if(!selectedFile) return;
@@ -355,11 +358,10 @@ export const CashView: React.FC<CashViewProps> = ({
     const updatedRow = { ...existing, [field]: value };
     const sale_amount = field === 'sale_amount' ? value : (updatedRow.sale_amount || 0);
     const cash_payment = field === 'cash_payment' ? value : (updatedRow.cash_payment || 0);
-    const uy_oplata = field === 'uy_oplata' ? value : (updatedRow.uy_oplata || 0);
     const terminal_click = field === 'terminal_click' ? value : (updatedRow.terminal_click || 0);
     const return_amount = field === 'return_amount' ? value : (updatedRow.return_amount || 0);
 
-    const remaining_debt = Math.max(0, sale_amount - cash_payment - uy_oplata - terminal_click - return_amount);
+    const remaining_debt = Math.max(0, sale_amount - cash_payment - terminal_click - return_amount);
     updatedRow.remaining_debt = remaining_debt;
 
     // Optimistic update
@@ -428,7 +430,6 @@ export const CashView: React.FC<CashViewProps> = ({
       customer_id: customers[0]?.id || '',
       sale_amount: '',
       cash_payment: '',
-      uy_oplata: '',
       nasiya_perech: '',
       nasiyadan_kirim: '',
       return_amount: '',
@@ -449,7 +450,6 @@ export const CashView: React.FC<CashViewProps> = ({
       customer_id: item.customer_id,
       sale_amount: item.sale_amount ? String(item.sale_amount) : '',
       cash_payment: item.cash_payment ? String(item.cash_payment) : '',
-      uy_oplata: item.uy_oplata ? String(item.uy_oplata) : '',
       nasiya_perech: item.nasiya_perech ? String(item.nasiya_perech) : '',
       nasiyadan_kirim: item.nasiyadan_kirim ? String(item.nasiyadan_kirim) : '',
       return_amount: item.return_amount ? String(item.return_amount) : '',
@@ -473,10 +473,9 @@ export const CashView: React.FC<CashViewProps> = ({
     try {
       const sale = Number(formData.sale_amount) || 0;
       const cash = Number(formData.cash_payment) || 0;
-      const uy = Number(formData.uy_oplata) || 0;
       const term = Number(formData.terminal_click) || 0;
       const ret = Number(formData.return_amount) || 0;
-      const autoRem = Math.max(0, sale - cash - uy - term - ret);
+      const autoRem = Math.max(0, sale - cash - term - ret);
 
       const payload = {
         cash_day_id:selectedFile?.id,
@@ -486,7 +485,6 @@ export const CashView: React.FC<CashViewProps> = ({
         customer_id: formData.customer_id,
         sale_amount: sale,
         cash_payment: cash,
-        uy_oplata: uy,
         nasiya_perech: Number(formData.nasiya_perech) || 0,
         nasiyadan_kirim: Number(formData.nasiyadan_kirim) || 0,
         return_amount: ret,
@@ -558,7 +556,6 @@ export const CashView: React.FC<CashViewProps> = ({
           { header: 'Mijoz (kontragent)', key: 'customer_name', width: 30 },
           { header: 'Summa', key: 'sale_amount', type: 'money', total: true },
           { header: 'Oplata (naqd)', key: 'cash_payment', type: 'money', total: true },
-          { header: 'Uy oplata', key: 'uy_oplata', type: 'money', total: true },
           { header: 'Nasiya va perech', key: 'nasiya_perech', type: 'money', total: true },
           { header: 'Nasiyadan kirim', key: 'nasiyadan_kirim', type: 'money', total: true },
           { header: 'Vozvrat', key: 'return_amount', type: 'money', total: true },
@@ -574,7 +571,6 @@ export const CashView: React.FC<CashViewProps> = ({
           customer_name: item.customer_name || '',
           sale_amount: item.sale_amount || 0,
           cash_payment: item.cash_payment || 0,
-          uy_oplata: item.uy_oplata || 0,
           nasiya_perech: item.nasiya_perech || 0,
           nasiyadan_kirim: item.nasiyadan_kirim || 0,
           return_amount: item.return_amount || 0,
@@ -815,6 +811,12 @@ export const CashView: React.FC<CashViewProps> = ({
 
           {/* Filters Bar: Quick Status pills, Search, Agent, Customer */}
           <div className="bg-white p-4 rounded-2xl border border-neutral-200 shadow-xs space-y-3">
+            <label className="text-xs font-semibold text-neutral-600">Server bo‘yicha
+              <select className="ml-2 rounded-lg border border-neutral-300 p-2" value={serverFilter} onChange={e => setServerFilter(e.target.value)}>
+                <option value="">Barcha serverlar</option>
+                {serverOptions.map((i: any) => <option key={i.id} value={i.id}>{i.config?.connection_name || i.system_name || i.provider_name}</option>)}
+              </select>
+            </label>
             {/* Quick status filters */}
             <div className="flex flex-wrap items-center gap-2 pb-2 border-b border-neutral-100">
               <span className="text-xs font-bold text-neutral-600 mr-1">Tezkor filtr:</span>
@@ -914,10 +916,6 @@ export const CashView: React.FC<CashViewProps> = ({
               <div>
                 <span className="text-neutral-400 text-[10px] uppercase block">Jami Oplata</span>
                 <span className="text-emerald-300 font-bold">{formatMoney(summaryData.totals?.cash_payment || 0)}</span>
-              </div>
-              <div>
-                <span className="text-neutral-400 text-[10px] uppercase block">Uy Oplata</span>
-                <span className="text-neutral-200 font-bold">{formatMoney(summaryData.totals?.uy_oplata || 0)}</span>
               </div>
               <div>
                 <span className="text-neutral-400 text-[10px] uppercase block">Nasiya</span>
@@ -1030,16 +1028,6 @@ export const CashView: React.FC<CashViewProps> = ({
                     onChange={e => setFormData({ ...formData, cash_payment: e.target.value })}
                     placeholder="0"
                     className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-neutral-300 font-bold text-emerald-700"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-neutral-700 mb-1">Уй оплата</label>
-                  <input
-                    type="number"
-                    value={formData.uy_oplata}
-                    onChange={e => setFormData({ ...formData, uy_oplata: e.target.value })}
-                    placeholder="0"
-                    className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-neutral-300"
                   />
                 </div>
                 <div>

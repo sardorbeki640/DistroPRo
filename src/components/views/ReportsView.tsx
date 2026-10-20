@@ -51,6 +51,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ user, onNavigate, onRe
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [syncMessage, setSyncMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isSyncingSalesDoctor, setIsSyncingSalesDoctor] = useState<boolean>(false);
+  const [reportServer, setReportServer] = useState('');
+  const [serverOptions, setServerOptions] = useState<any[]>([]);
+  useEffect(() => { api.getIntegrations().then(r => setServerOptions(r.integrations || [])).catch(() => {}); }, []);
   // The connected distribution system (SalesDoctor, Linko, …): the "SFA" tab and sync follow it.
   const distribution = useDistribution();
   const dName = distribution.name;
@@ -78,10 +81,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ user, onNavigate, onRe
     setIsLoading(true);
     try {
       if (activeTab === 'PNL') {
-        const res = await api.getProfitAndLossReport(fromDate, toDate);
+        const res = await api.getProfitAndLossReport(fromDate, toDate, reportServer || undefined);
         setPnlData(res.report);
       } else if (activeTab === 'GROSS_PROFIT') {
-        const res = await api.getGrossProfitReport({ from_date: fromDate, to_date: toDate, group_by: groupBy });
+        const res = await api.getGrossProfitReport({ from_date: fromDate, to_date: toDate, group_by: groupBy, integration_id: reportServer || undefined });
         setGrossProfitRows(res.rows || []);
       } else if (activeTab === 'AGING') {
         const res = await api.getAgingReport(toDate);
@@ -105,7 +108,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ user, onNavigate, onRe
 
   useEffect(() => {
     loadActiveReport();
-  }, [activeTab, fromDate, toDate, groupBy]);
+  }, [activeTab, fromDate, toDate, groupBy, reportServer]);
 
   // Filters of the table reports; the same rows go to Excel.
   const [reportSearch, setReportSearch] = useState('');
@@ -295,6 +298,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ user, onNavigate, onRe
               className="text-xs font-semibold text-neutral-700 focus:outline-hidden"
             />
           </div>
+          {(activeTab === 'PNL' || activeTab === 'GROSS_PROFIT') && <select aria-label="Server bo‘yicha hisobot" className="rounded-lg border border-neutral-300 bg-white px-2.5 py-2 text-xs" value={reportServer} onChange={e => setReportServer(e.target.value)}>
+            <option value="">Barcha serverlar</option>
+            {serverOptions.map((i: any) => <option key={i.id} value={i.id}>{i.config?.connection_name || i.system_name || i.provider_name}</option>)}
+          </select>}
 
           <button
             onClick={loadActiveReport}

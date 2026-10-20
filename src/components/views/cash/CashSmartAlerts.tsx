@@ -20,7 +20,7 @@ export const CashSmartAlerts: React.FC<CashSmartAlertsProps> = ({
   // Analyze anomalies
   const totalSales = items.reduce((sum, i) => sum + (i.sale_amount || 0), 0);
   const totalDebt = items.reduce((sum, i) => sum + (i.remaining_debt || 0), 0);
-  const totalInflow = items.reduce((sum, i) => sum + (i.cash_payment || 0) + (i.uy_oplata || 0) + (i.nasiyadan_kirim || 0) + (i.terminal_click || 0), 0);
+  const totalInflow = items.reduce((sum, i) => sum + (i.cash_payment || 0) + (i.nasiyadan_kirim || 0) + (i.terminal_click || 0), 0);
 
   // Group by agent to check debt concentration
   const agentMap = new Map<string, { name: string; sales: number; debt: number; count: number }>();

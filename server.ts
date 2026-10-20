@@ -49,6 +49,14 @@ import { errorHandler } from './server/middleware/error.middleware.ts';
 import { SetupService } from './server/services/setup.service.ts';
 
 async function startServer() {
+  // Production must use a stable private key: it signs login tokens and encrypts saved API/bot credentials.
+  // Generating a temporary key at boot would invalidate sessions on restart and could leave credentials unencrypted.
+  if (process.env.NODE_ENV === 'production') {
+    const jwtSecret = process.env.JWT_SECRET || '';
+    if (jwtSecret.length < 32 || jwtSecret === 'distribution_finance_super_secret_jwt_key_2026') {
+      throw new Error('Ishlab turgan server uchun JWT_SECRET sirlar bo‘limida kamida 32 belgili doimiy maxfiy kalit sifatida sozlanishi kerak.');
+    }
+  }
   const app = express();
   const portArgIndex = process.argv.indexOf('--port');
   const hostArgIndex = process.argv.indexOf('--host');

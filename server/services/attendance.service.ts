@@ -569,7 +569,7 @@ export class AttendanceService {
   }
 
   /**
-   * Every violation to the company's Google Sheet, “Jarimalar YYYY-MM” (once each): automatic lateness and absence and
+   * Every violation to one shared company Google Sheet, “Jarimalar” (once each): automatic lateness and absence and
    * those a manager entered, with the percent and the month's total so far. An absence goes once its day is over. The
    * current month is covered (and the last one in the first days of a month, so its last days are not missed).
    */
@@ -578,7 +578,7 @@ export class AttendanceService {
     const months = [today.slice(0, 7)];
     if (Number(today.slice(8, 10)) <= 3) months.unshift(new Date(Date.parse(`${today.slice(0, 8)}01T12:00:00Z`) - 86_400_000).toISOString().slice(0, 7));
     let queued = 0;
-    for (const s of db.find('attendance_settings', x => (!company_id || x.company_id === company_id) && !!x.sheets?.enabled && !!x.sheets.url && x.penalty.mode === 'RULES')) {
+    for (const s of db.find('attendance_settings', x => (!company_id || x.company_id === company_id) && !!x.sheets?.enabled && !!x.sheets.url)) {
       const names = new Map(db.find('employees', e => e.company_id === s.company_id).map(e => [e.id, e]));
       const stamp = now.toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' });
       const ids = new Set([...this.tracked(s.company_id, s).map(t => t.employee_id), ...db.find('discipline_violations', v => v.company_id === s.company_id && months.some(m => v.date.startsWith(m))).map(v => v.employee_id)]);
@@ -588,14 +588,16 @@ export class AttendanceService {
         const group = this.planOf(s, employee_id).group?.name || '';
         for (const month of months) {
           let total = 0;
-          for (const o of this.occurrences(s.company_id, employee_id, month, s)) {
-            total = Math.round((total + o.percent) * 100) / 100;
+          const isRuleMode = s.penalty.mode === 'RULES';
+          const entries = isRuleMode
+            ? this.occurrences(s.company_id, employee_id, month, s).map(o => ({ ...o, fine: o.percent, running: 0, label: (s.rules || []).find(r => r.type === o.type)?.label || VIOLATION_LABEL[o.type], detail: o.minutes ? `${o.minutes} daqiqa kech` : o.note || '', automatic: o.source !== 'MANUAL' }))
+            : this.report(s.company_id, `${month}-01`, new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10), employee_id).filter(o => o.penalty > 0).map(o => ({ date: o.date, type: o.late_minutes ? 'LATE' as const : 'ABSENT' as const, id: undefined, fine: o.penalty, running: 0, label: o.violations?.join(', ') || 'Davomat jarimasi', detail: o.late_minutes ? `${o.late_minutes} daqiqa kech` : 'Davomat qoidasi', automatic: true }));
+          for (const o of entries) {
             if (o.type === 'ABSENT' && o.date >= today) continue;
-            const rule = (s.rules || []).find(r => r.type === o.type);
-            const detail = o.minutes ? `${o.minutes} daqiqa kech` : o.note || '';
-            if (SheetsService.queue(s.company_id, `pen:${employee_id}:${o.date}:${o.type}:${o.id || 'auto'}`, `Jarimalar ${month}`, [
-              o.date.split('-').reverse().join('.'), e.full_name, e.position || '', group, rule?.label || VIOLATION_LABEL[o.type], detail,
-              o.percent, total, o.source === 'MANUAL' ? 'Rahbar kiritgan' : 'Avtomatik', stamp
+            total = Math.round((total + o.fine) * 100) / 100;
+            if (SheetsService.queue(s.company_id, `${isRuleMode ? 'pen' : 'penamt'}:${employee_id}:${o.date}:${o.type}:${o.id || 'auto'}`, 'Jarimalar', [
+              o.date.split('-').reverse().join('.'), e.full_name, e.position || '', group, o.label, o.detail,
+              o.fine, total, o.automatic ? 'Avtomatik' : 'Rahbar kiritgan', stamp
             ])) queued++;
           }
         }
@@ -660,9 +662,10 @@ export class AttendanceService {
     // Already in the sheet: a "cancelled" row under it (rows are only appended there).
     if (db.findById('sheet_rows', `${company_id}:pen:${v.employee_id}:${v.date}:${v.type}:${v.id}`)) {
       const e = db.findById('employees', v.employee_id);
-      SheetsService.queue(company_id, `pencx:${v.id}`, `Jarimalar ${v.date.slice(0, 7)}`, [
+      const rule = (this.settings(company_id).rules || []).find(r => r.type === v.type);
+      SheetsService.queue(company_id, `pencx:${v.id}`, 'Jarimalar', [
         v.date.split('-').reverse().join('.'), e?.full_name || '', e?.position || '', this.planOf(this.settings(company_id), v.employee_id).group?.name || '',
-        VIOLATION_LABEL[v.type], `Bekor qilindi: ${reason.trim()}`, 0, '', 'BEKOR QILINDI', new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' })
+        VIOLATION_LABEL[v.type], `Bekor qilindi: ${reason.trim()}`, rule?.percent || 0, '', 'BEKOR QILINDI', new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' })
       ]);
     }
   }

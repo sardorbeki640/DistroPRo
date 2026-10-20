@@ -125,7 +125,6 @@ export interface DailyOrderEntry {
   customer_name?: string;
   sale_amount: number; // Сумма
   cash_payment?: number; // Оплата (Naqd)
-  uy_oplata?: number; // Уй оплата
   nasiya_perech?: number; // Насия ва переч (Qarz & perechisleniye)
   nasiyadan_kirim?: number; // Насиядан кирим (Eski qarzdan tushum)
   credit_amount?: number;

@@ -368,7 +368,7 @@ const SheetsCard: React.FC<{ onError: (e: string) => void; onFlash: (t: string) 
   return (
     <div className="lg:col-span-2 space-y-2 rounded-2xl border border-emerald-200 bg-white p-4 text-xs">
       <h3 className="text-sm font-bold">Google Sheets — ish boshlash va jarimalar avtomatik</h3>
-      <p className="text-[11px] text-neutral-500">Jadvalga o‘zi yoziladi, har oyga alohida varaqlar: <b>“Davomat YYYY-MM”</b> — har xodimning har kungi ish boshlashi (Face ID, dumaloq video yoki birinchi vizit); <b>“Jarimalar YYYY-MM”</b> — har bir qoidabuzarlik (kechikish, kelmay qolish, rahbar kiritgani), jarima foizi va shu oy jami (har 10 daqiqada). Bekor qilingan jarima ostiga “BEKOR QILINDI” qatori qo‘shiladi.</p>
+      <p className="text-[11px] text-neutral-500">Jadvalga o‘zi yoziladi: <b>“Davomat YYYY-MM”</b> — har xodimning har kungi ish boshlashi (Face ID, dumaloq video yoki birinchi vizit); <b>“Jarimalar”</b> — barcha sanalardagi qoidabuzarliklar (kechikish, kelmay qolish, rahbar kiritgani) bitta varaqda, shu oy yig‘indisi bilan (har 10 daqiqada). Bekor qilingan jarima ostiga “BEKOR QILINDI” qatori qo‘shiladi.</p>
       <ol className="list-decimal space-y-0.5 rounded-xl bg-neutral-50 p-3 pl-7 text-[11px] text-neutral-600">
         <li>Google Sheets’da yangi jadval oching → <b>Kengaytmalar → Apps Script</b>.</li>
         <li>U yerdagi kodni o‘chirib, pastdagi <b>skript kodini</b> joylang va saqlang.</li>

@@ -348,7 +348,7 @@ export interface DailyOrderEntry {
   customer_name?: string;
   sale_amount: number; // Сумма
   cash_payment?: number; // Оплата (Naqd)
-  uy_oplata?: number; // Уй оплата
+  uy_oplata?: number; // Legacy storage only; the app no longer accepts or counts this unsupported payment type.
   nasiya_perech?: number; // Насия ва переч (Qarz & perechisleniye)
   nasiyadan_kirim?: number; // Насиядан кирим (Eski qarzdan tushum)
   credit_amount?: number;

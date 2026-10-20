@@ -605,7 +605,8 @@ export class SalesDocAdapter implements IntegrationAdapter {
 
       // Every price type of SalesDoc with its prices, exactly as listed there (9.8 getPriceType, 9.9 getPrice).
       const { types: priceTypes, prices: priceLists } = await this.readPriceLists(config);
-      const saleType = this.pickPriceType(priceTypes, 'sale', config.sale_price_type_id);
+      const chosenSalePriceTypes = Array.isArray(config.sale_price_type_ids) ? config.sale_price_type_ids.map(String) : [];
+      const saleType = this.pickPriceType(priceTypes, 'sale', chosenSalePriceTypes[0] || config.sale_price_type_id);
       const costType = this.pickPriceType(priceTypes, 'purchase', config.purchase_price_type_id);
 
       if (productList.length > 0) {

@@ -14,7 +14,10 @@ if (configuredSecret && (KNOWN_PUBLIC_SECRETS.has(configuredSecret) || configure
 const JWT_SECRET = configuredSecret || randomBytes(48).toString('hex');
 const TOKEN_EXPIRY = '24h';
 // Failed sign-ins per IP+login; 10 failures lock that pair for 15 minutes.
-const LOGIN_ATTEMPTS = new Map<string, { count: number; lockedUntil: number }>();
+const LOGIN_ATTEMPTS = new Map<string, { count: number; lockedUntil: number; lastAttemptAt: number }>();
+const MAX_LOGIN_KEYS = 10_000;
+const LOGIN_WINDOW_MS = 30 * 60_000;
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(randomBytes(32).toString('hex'), 10);
 
 export interface AuthTokenPayload {
   userId: string;
@@ -50,17 +53,26 @@ export class AuthService {
     // Staff passwords may be short (6 digits): besides the per-address limit, one login is locked after 20 wrong
     // tries from anywhere, so guessing from many addresses does not work either.
     const loginKey = `*|${normalized}`;
+    const now = Date.now();
     for (const k of [key, loginKey]) {
       const attempts = LOGIN_ATTEMPTS.get(k);
       if (attempts && attempts.lockedUntil > Date.now()) {
         throw new Error(`Juda ko'p noto'g'ri urinish. ${Math.ceil((attempts.lockedUntil - Date.now()) / 60000)} daqiqadan keyin qayta urining.`);
       }
+      if (attempts && (now - attempts.lastAttemptAt > LOGIN_WINDOW_MS || (attempts.lockedUntil > 0 && attempts.lockedUntil <= now))) LOGIN_ATTEMPTS.delete(k);
     }
     const user = db.findOne('users', u => u.email.toLowerCase() === normalized || (!!u.login && u.login.toLowerCase() === normalized));
     const fail = (message: string) => {
+      if (LOGIN_ATTEMPTS.size >= MAX_LOGIN_KEYS) {
+        for (const [storedKey, value] of LOGIN_ATTEMPTS) {
+          if (now - value.lastAttemptAt > LOGIN_WINDOW_MS || (value.lockedUntil > 0 && value.lockedUntil <= now)) LOGIN_ATTEMPTS.delete(storedKey);
+        }
+        while (LOGIN_ATTEMPTS.size >= MAX_LOGIN_KEYS) LOGIN_ATTEMPTS.delete(LOGIN_ATTEMPTS.keys().next().value!);
+      }
       for (const [k, max, minutes] of [[key, 10, 15], [loginKey, 20, 30]] as const) {
-        const a = LOGIN_ATTEMPTS.get(k) || { count: 0, lockedUntil: 0 };
+        const a = LOGIN_ATTEMPTS.get(k) || { count: 0, lockedUntil: 0, lastAttemptAt: now };
         a.count++;
+        a.lastAttemptAt = now;
         if (a.count >= max) { a.lockedUntil = Date.now() + minutes * 60000; a.count = 0; }
         LOGIN_ATTEMPTS.set(k, a);
       }
@@ -68,15 +80,12 @@ export class AuthService {
     };
 
     if (!user) {
+      bcrypt.compareSync(password, DUMMY_PASSWORD_HASH);
       throw fail('Login yoki parol noto\'g\'ri.');
     }
 
-    if (user.status !== 'ACTIVE') {
-      throw new Error('Foydalanuvchi hisobi bloklangan yoki nofaol.');
-    }
-
     const isMatch = bcrypt.compareSync(password, user.password_hash);
-    if (!isMatch) {
+    if (user.status !== 'ACTIVE' || !isMatch) {
       throw fail('Login yoki parol noto\'g\'ri.');
     }
     LOGIN_ATTEMPTS.delete(key);
@@ -173,7 +182,9 @@ export class AuthService {
     if (!user) throw new Error('Foydalanuvchi topilmadi.');
     if (!bcrypt.compareSync(currentPassword, user.password_hash)) throw new Error('Joriy parol noto‘g‘ri.');
     if (currentPassword === newPassword) throw new Error('Yangi parol eskisidan farq qilsin.');
-    if (newPassword.length < 6) throw new Error('Yangi parol kamida 6 belgi bo‘lsin.');
+    const privileged = this.getUserPermissions(userId);
+    const minimumLength = privileged.is_super_admin || privileged.roles.some(r => r.name === 'ADMIN') ? 12 : 8;
+    if (newPassword.length < minimumLength) throw new Error(`Yangi parol kamida ${minimumLength} belgidan iborat bo‘lsin.`);
     db.update('users', userId, { password_hash: bcrypt.hashSync(newPassword, 12), must_change_password: false });
     AuditService.log({ company_id: user.company_id, user_id: user.id, user_email: user.email, action: 'UPDATE', entity: 'User', entity_id: user.id, old_value: null, new_value: { password_changed: true }, reason: 'Foydalanuvchi parolini almashtirdi' });
   }

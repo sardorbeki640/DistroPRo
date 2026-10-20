@@ -21,6 +21,7 @@ import type {
 import { AuditService } from '../services/audit.service.ts';
 import { ForecastService } from '../services/forecast.service.ts';
 import { SalesDocHistoryService } from '../services/salesdoc-history.service.ts';
+import { tagIntegrationRows } from '../services/source-tagging.service.ts';
 import { CustomerBalanceService } from '../services/customer_balance.service.ts';
 import { canonicalCustomerCode, computeOrderCogs, isPlausibleCost } from '../services/cogs.ts';
 import { businessToday } from '../utils/date.ts';
@@ -104,13 +105,15 @@ export class IntegrationProvider {
     companyId: string, 
     providerName: string, 
     userId: string,
-    userEmail: string
+    userEmail: string,
+    integrationId?: string
   ): Promise<SyncResult> {
     const upperProvider = providerName.toUpperCase();
     const adapter = this.getAdapter(upperProvider);
     const integrationRecord = db.findOne('integrations', i => 
       i.company_id === companyId && 
-      (i.provider_name.toUpperCase() === upperProvider || (upperProvider.includes('SALESDOC') && i.provider_name.toUpperCase().includes('SALESDOC')))
+      (i.provider_name.toUpperCase() === upperProvider || (upperProvider.includes('SALESDOC') && i.provider_name.toUpperCase().includes('SALESDOC'))) &&
+      (!integrationId || i.id === integrationId)
     );
     const config = integrationRecord?.config || {};
     if (integrationRecord?.disabled) throw new Error(`${upperProvider} o‘chirilgan. Sinxronlash uchun avval integratsiyani yoqing.`);
@@ -134,7 +137,7 @@ export class IntegrationProvider {
     const errors: string[] = [];
     const now = new Date().toISOString();
     const today = businessToday();
-    const integrationId = integrationRecord?.id || 'manual';
+    const syncIntegrationId = integrationRecord?.id || 'manual';
 
     // Rules for every non-SalesDoc provider:
     // - records are matched by external code only; nothing is ever attached to a "first" customer;
@@ -162,6 +165,7 @@ export class IntegrationProvider {
               purchase_cost: cost,
               current_cost: cost,
               selling_price: Number(p.selling_price) || 0,
+              ...(Array.isArray(p.prices) ? { prices: p.prices } : {}),
               stock_quantity: stockQty,
               daily_sales_avg: 0,
               out_of_stock_days: 0,
@@ -233,14 +237,14 @@ export class IntegrationProvider {
       const customers = await adapter.importCustomers(config);
       const customerMap = new Map<string, Customer>();
       for (const c of db.find('customers', c => c.company_id === companyId)) if (c.code) customerMap.set(canonicalCustomerCode(c.code), c);
-      const extCustomerIndex = new Map(db.find('external_customers', e => e.company_id === companyId && e.integration_id === integrationId).map(e => [e.external_code, e]));
+      const extCustomerIndex = new Map(db.find('external_customers', e => e.company_id === companyId && e.integration_id === syncIntegrationId).map(e => [e.external_code, e]));
       for (const cust of customers) {
         if (!cust.externalCode) { recordsFailed++; continue; }
         const oldExt = extCustomerIndex.get(cust.externalCode);
         const extCust: ExternalCustomer = {
           id: oldExt?.id || randomUUID(),
           company_id: companyId,
-          integration_id: integrationId,
+          integration_id: syncIntegrationId,
           external_code: cust.externalCode,
           name: cust.name,
           phone: cust.phone,
@@ -286,11 +290,11 @@ export class IntegrationProvider {
           errors.push(`Buyurtma ${ord.orderNumber || ord.externalId || '?'}: mijoz kodi (${ord.customerCode || 'yo‘q'}) topilmadi, o‘tkazib yuborildi.`);
           continue;
         }
-        const oldExt = db.findOne('external_orders', o => o.company_id === companyId && o.integration_id === integrationId && o.external_order_id === ord.externalId);
+        const oldExt = db.findOne('external_orders', o => o.company_id === companyId && o.integration_id === syncIntegrationId && o.external_order_id === ord.externalId);
         const extOrder: ExternalOrder = {
           id: oldExt?.id || randomUUID(),
           company_id: companyId,
-          integration_id: integrationId,
+          integration_id: syncIntegrationId,
           external_order_id: ord.externalId,
           customer_external_id: ord.customerCode,
           total_amount: ord.totalAmount,
@@ -355,12 +359,12 @@ export class IntegrationProvider {
           errors.push(`To‘lov ${p.externalPaymentId || '?'}: mijoz yoki summa aniqlanmadi, o‘tkazib yuborildi.`);
           continue;
         }
-        const seen = db.findOne('external_payments', e => e.company_id === companyId && e.integration_id === integrationId && e.external_payment_id === p.externalPaymentId);
+        const seen = db.findOne('external_payments', e => e.company_id === companyId && e.integration_id === syncIntegrationId && e.external_payment_id === p.externalPaymentId);
         if (seen) continue;
         db.insert('external_payments', {
           id: randomUUID(),
           company_id: companyId,
-          integration_id: integrationId,
+          integration_id: syncIntegrationId,
           external_payment_id: p.externalPaymentId,
           amount: p.amount,
           payment_date: p.paymentDate,
@@ -386,6 +390,8 @@ export class IntegrationProvider {
         new_value: { recordsImported, recordsFailed, ordersCount: orders.length, customersCount: customers.length, paymentsCount: payments.length, timestamp: now },
         reason: `${upperProvider} sinxronlash: ${recordsImported} ta yozuv, ${recordsFailed} ta o‘tkazib yuborildi`
       });
+
+      if (integrationRecord) tagIntegrationRows(integrationRecord.id);
 
       return {
         provider: upperProvider,
@@ -493,7 +499,7 @@ export class IntegrationProvider {
         const entry = db.findOne('daily_order_entries', e => e.cash_day_id === cashDayId && e.external_order_id === ord.externalId);
         if (entry && entry.status !== 'CANCELLED') {
           const posted = db.findOne('integration_transactions', t => t.payload?.rowId === entry.id && ['PROCESSED', 'SENDING', 'UNCERTAIN'].includes(t.status));
-          const hasCash = (entry.cash_payment || 0) + (entry.uy_oplata || 0) + (entry.terminal_click || 0) + (entry.nasiyadan_kirim || 0) > 0;
+          const hasCash = (entry.cash_payment || 0) + (entry.terminal_click || 0) + (entry.nasiyadan_kirim || 0) > 0;
           db.update('daily_order_entries', entry.id, posted || hasCash
             ? { note: `${systemLabel}'da bekor qilingan, lekin kassada to'lov bor — tekshiring. ${entry.note || ''}`.trim() }
             : { status: 'CANCELLED', sale_amount: 0, remaining_debt: 0, nasiya_perech: 0, credit_amount: 0, note: `${systemLabel}'da bekor qilingan` });
@@ -560,7 +566,7 @@ export class IntegrationProvider {
         });
       } else {
         if(db.findOne('integration_transactions',t=>t.payload?.rowId===entry!.id && ['PROCESSED','SENDING','UNCERTAIN'].includes(t.status))) continue;
-        const debt=Math.max(0,ord.totalAmount-(entry.cash_payment||0)-(entry.uy_oplata||0)-(entry.terminal_click||0)-(entry.return_amount||0));
+        const debt=Math.max(0,ord.totalAmount-(entry.cash_payment||0)-(entry.terminal_click||0)-(entry.return_amount||0));
         db.update('daily_order_entries', entry.id, {
           integration_id:activeIntegration?.id,external_order_id:ord.externalId,customer_ref:ord.customerRef,order_ref:ord.orderRef,payment_type_ref:ord.paymentTypeRef,
           customer_id:cust.id,customer_name:cust.name,remaining_debt:debt,nasiya_perech:debt,credit_amount:debt,

@@ -1487,7 +1487,6 @@ export class CashService {
         { header: 'Mijoz kodi', key: 'code', width: 12 },
         { header: 'Summa', key: 'sale_amount', type: 'money', total: true },
         { header: 'Oplata (naqd)', key: 'cash_payment', type: 'money', total: true },
-        { header: 'Uy oplata', key: 'uy_oplata', type: 'money', total: true },
         { header: 'Nasiya va perech', key: 'nasiya_perech', type: 'money', total: true },
         { header: 'Nasiyadan kirim', key: 'nasiyadan_kirim', type: 'money', total: true },
         { header: 'Vozvrat', key: 'return_amount', type: 'money', total: true },
@@ -1499,7 +1498,7 @@ export class CashService {
       rows: orders.map((o, i) => {
         const cust = custMap.get(o.customer_id);
         const terminal = o.terminal_click ?? ((o.terminal_amount || 0) + (o.click_amount || 0));
-        const paid = (o.cash_payment || 0) + (o.uy_oplata || 0) + (terminal || 0) + (o.return_amount || 0);
+        const paid = (o.cash_payment || 0) + (terminal || 0) + (o.return_amount || 0);
         return {
           n: i + 1,
           order_number: o.order_number,
@@ -1508,7 +1507,6 @@ export class CashService {
           code: cust?.code || '',
           sale_amount: o.sale_amount || 0,
           cash_payment: o.cash_payment ?? o.cash_amount ?? 0,
-          uy_oplata: o.uy_oplata || 0,
           nasiya_perech: o.nasiya_perech ?? o.credit_amount ?? 0,
           nasiyadan_kirim: o.nasiyadan_kirim ?? o.credit_collection ?? 0,
           return_amount: o.return_amount || 0,
@@ -1665,7 +1663,7 @@ export class CashService {
 
   /**
    * Universal Registry query matching user's spreadsheet:
-   * Columns: Agent, Kontragent, Summa, Oplata, Uy oplata, Nasiya va perech, Nasiyadan kirim, Vozvrat, Kun surildi, Terminal va click, Qoldiq
+   * Columns: Agent, Kontragent, Summa, Oplata, Nasiya va perech, Nasiyadan kirim, Vozvrat, Kun surildi, Terminal va click, Qoldiq
    * Summary: Umumiy sotuv, Kirim, Qarzdorlik
    */
   public static getRegistry(company_id: string, options: {
@@ -1674,8 +1672,12 @@ export class CashService {
     agent_id?: string;
     customer_id?: string;
     search?: string;
+    integration_id?: string;
   } = {}) {
-    let orders = db.find('daily_order_entries', o => o.company_id === company_id);
+    const disabledIntegrationIds = new Set(db.find('integrations', i => i.company_id === company_id && !!i.disabled).map(i => i.id));
+    let orders = db.find('daily_order_entries', o => o.company_id === company_id && (options.integration_id
+      ? String(o.integration_id || '') === options.integration_id
+      : !o.integration_id || !disabledIntegrationIds.has(String(o.integration_id))));
 
     if (options.from_date) {
       orders = orders.filter(o => o.order_date >= options.from_date!);
@@ -1711,26 +1713,26 @@ export class CashService {
     const rows = orders.map(o => {
       const cust = custMap.get(o.customer_id);
       const ag = o.agent_id ? agentMap.get(o.agent_id) : null;
+      const visibleOrder = { ...o } as any;
+      delete visibleOrder.uy_oplata; // Legacy value stays archived but is no longer returned or included in totals.
 
       const sale_amount = o.sale_amount || 0; // Сумма
       const cash_payment = o.cash_payment ?? (o.cash_amount || 0); // Оплата
-      const uy_oplata = o.uy_oplata || 0; // Уй оплата
       const nasiya_perech = o.nasiya_perech ?? (o.credit_amount || 0); // Насия ва переч
       const nasiyadan_kirim = o.nasiyadan_kirim ?? (o.credit_collection || 0); // Насиядан кирим
       const return_amount = o.return_amount || 0; // Возврать
       const carried_forward_amount = o.carried_forward_amount || 0; // Кун сурилди
       const terminal_click = o.terminal_click ?? ((o.terminal_payment || 0) + (o.click_payment || 0) + (o.terminal_amount || 0) + (o.click_amount || 0)); // Терминал ва клик
-      const remaining_debt = o.remaining_debt ?? Math.max(0, sale_amount - cash_payment - uy_oplata - terminal_click - return_amount); // Колдик
+      const remaining_debt = o.remaining_debt ?? Math.max(0, sale_amount - cash_payment - terminal_click - return_amount); // Колдик
 
       return {
-        ...o,
+        ...visibleOrder,
         agent_name: ag ? ag.full_name : (o.agent_name || 'Umumiy Savdo'),
         agent_code: ag ? ag.code : '',
         customer_name: cust ? cust.name : (o.customer_name || 'Noma\'lum mijoz'),
         customer_code: cust ? cust.code : '',
         sale_amount,
         cash_payment,
-        uy_oplata,
         nasiya_perech,
         nasiyadan_kirim,
         return_amount,
@@ -1742,12 +1744,11 @@ export class CashService {
 
     // Summary calculations
     let total_sales = 0; // Umumiy sotuv
-    let total_inflow = 0; // Kirim: Oplata + Uy oplata + Nasiyadan kirim + Terminal va click
+    let total_inflow = 0; // Kirim: Oplata + Nasiyadan kirim + Terminal va click
     let total_debt = 0; // Qarzdorlik: Nasiya / Qoldiq
 
     let sum_sale_amount = 0;
     let sum_cash_payment = 0;
-    let sum_uy_oplata = 0;
     let sum_nasiya_perech = 0;
     let sum_nasiyadan_kirim = 0;
     let sum_return_amount = 0;
@@ -1757,13 +1758,12 @@ export class CashService {
 
     for (const r of rows) {
       total_sales += r.sale_amount;
-      const inflow = r.cash_payment + r.uy_oplata + r.nasiyadan_kirim + r.terminal_click;
+      const inflow = r.cash_payment + r.nasiyadan_kirim + r.terminal_click;
       total_inflow += inflow;
       total_debt += r.remaining_debt;
 
       sum_sale_amount += r.sale_amount;
       sum_cash_payment += r.cash_payment;
-      sum_uy_oplata += r.uy_oplata;
       sum_nasiya_perech += r.nasiya_perech;
       sum_nasiyadan_kirim += r.nasiyadan_kirim;
       sum_return_amount += r.return_amount;
@@ -1779,7 +1779,6 @@ export class CashService {
       totals: {
         sum_sale_amount,
         sum_cash_payment,
-        sum_uy_oplata,
         sum_nasiya_perech,
         sum_nasiyadan_kirim,
         sum_return_amount,
@@ -1835,7 +1834,7 @@ export class CashService {
         id, company_id: dto.company_id, cash_day_id: cashDay.id,
         order_number: `TOLOV-${Date.now().toString().slice(-6)}`, order_date: today,
         agent_id: customer.agent_id || null, customer_id: customer.id, customer_name: customer.name,
-        sale_amount: 0, cash_payment: 0, uy_oplata: 0, nasiya_perech: 0,
+        sale_amount: 0, cash_payment: 0, nasiya_perech: 0,
         nasiyadan_kirim: isCash ? amount : 0, terminal_click: isCash ? 0 : amount,
         return_amount: 0, carried_forward_amount: 0, remaining_debt: 0,
         cash_amount: 0, terminal_amount: isCash ? 0 : amount, click_amount: 0, credit_amount: 0, credit_collection: amount,
@@ -1873,7 +1872,6 @@ export class CashService {
     order_number?: string;
     sale_amount: number;
     cash_payment?: number;
-    uy_oplata?: number;
     nasiya_perech?: number;
     nasiyadan_kirim?: number;
     return_amount?: number;
@@ -1910,7 +1908,6 @@ export class CashService {
 
     const sale_amount = Number(dto.sale_amount) || 0;
     const cash_payment = Number(dto.cash_payment) || 0;
-    const uy_oplata = Number(dto.uy_oplata) || 0;
     const nasiya_perech = Number(dto.nasiya_perech) || 0;
     const nasiyadan_kirim = Number(dto.nasiyadan_kirim) || 0;
     const return_amount = Number(dto.return_amount) || 0;
@@ -1918,7 +1915,7 @@ export class CashService {
     const terminal_click = Number(dto.terminal_click) || 0;
     const remaining_debt = dto.remaining_debt !== undefined 
       ? Number(dto.remaining_debt) 
-      : Math.max(0, sale_amount - cash_payment - uy_oplata - terminal_click - return_amount);
+      : Math.max(0, sale_amount - cash_payment - terminal_click - return_amount);
 
     const orderEntry: DailyOrderEntry = {
       id: orderId,
@@ -1930,7 +1927,6 @@ export class CashService {
       customer_id: dto.customer_id,
       sale_amount,
       cash_payment,
-      uy_oplata,
       nasiya_perech,
       nasiyadan_kirim,
       return_amount,
@@ -2030,16 +2026,16 @@ export class CashService {
     const day=db.findById('cash_days',existing.cash_day_id);
     if(day?.status!=='OPEN') throw new Error('Yopiq kun yozuvini tahrirlab bo‘lmaydi.');
     if(db.findOne('integration_transactions',t=>t.company_id===company_id && t.payload?.direction==='OUTBOUND' && t.payload?.rowId===id && ['PROCESSED','SENDING','UNCERTAIN'].includes(t.status))) throw new Error('Distribyutor tizimiga yuborilgan to‘lov qulflangan. Avval to‘lovni solishtiring.');
-    const allowed=['order_number','agent_id','customer_id','sale_amount','cash_payment','uy_oplata','terminal_click','nasiyadan_kirim','return_amount','carried_forward_amount','note'];
+    const allowed=['order_number','agent_id','customer_id','sale_amount','cash_payment','terminal_click','nasiyadan_kirim','return_amount','carried_forward_amount','note'];
     dto=Object.fromEntries(Object.entries(dto).filter(([key])=>allowed.includes(key)));
-    for(const key of ['sale_amount','cash_payment','uy_oplata','terminal_click','nasiyadan_kirim','return_amount','carried_forward_amount']) {
+    for(const key of ['sale_amount','cash_payment','terminal_click','nasiyadan_kirim','return_amount','carried_forward_amount']) {
       const value=(dto as any)[key];
       if(value!==undefined && (typeof value!=='number'||!Number.isFinite(value)||value<0)) throw new Error('Summalar manfiy bo‘lmagan son bo‘lsin.');
     }
     if(existing.external_order_id && (dto.customer_id && dto.customer_id!==existing.customer_id || dto.sale_amount!==undefined && dto.sale_amount!==existing.sale_amount)) throw new Error('Tizimdan kelgan buyurtmaning mijozi yoki summasini o‘sha tizimning o‘zida o‘zgartiring.');
     const merged={...existing,...dto};
     if(!db.findOne('customers',c=>c.id===merged.customer_id && c.company_id===company_id)) throw new Error('Mijoz topilmadi');
-    const paid=(merged.cash_payment||0)+(merged.uy_oplata||0)+(merged.terminal_click||0)+(merged.return_amount||0);
+    const paid=(merged.cash_payment||0)+(merged.terminal_click||0)+(merged.return_amount||0);
     if(paid>merged.sale_amount) throw new Error('To‘lov va qaytarish savdo summasidan oshdi.');
     dto.remaining_debt=merged.sale_amount-paid;
     dto.nasiya_perech=dto.remaining_debt;

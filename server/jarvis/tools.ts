@@ -258,7 +258,7 @@ export const TOOLS: ToolDef[] = [
       const sum = (k: string) => money(rows.reduce((s2, r: any) => s2 + (Number(r[k]) || 0), 0));
       return {
         date, opened: true, status: days.map(d => d.status), orders: rows.length,
-        sales: sum('sale_amount'), cash: sum('cash_payment'), uy_oplata: sum('uy_oplata'), terminal_click: sum('terminal_click'),
+        sales: sum('sale_amount'), cash: sum('cash_payment'), terminal_click: sum('terminal_click'),
         debt_collected: sum('nasiyadan_kirim'), returns: sum('return_amount'), left_as_debt: sum('remaining_debt'),
         expenses: money(days.reduce((s2, d) => s2 + (d.expense_amount || 0), 0)),
         opening: money(days.reduce((s2, d) => s2 + (d.opening_balance || 0), 0)), expected_closing: money(days.reduce((s2, d) => s2 + (d.calculated_closing_balance || 0), 0)),

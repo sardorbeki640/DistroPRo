@@ -34,12 +34,14 @@ import { IntegrationRecord, NavView } from '../../types.ts';
 interface IntegrationConfigState {
   forecast_days?:number;
   order_date_field?:string;
-  uy_oplata_mode?:string;
   payment_cash_id?:string;
   payment_terminal_id?:string;
   sale_price_type_id?:string;
+  sale_price_type_ids?:string[];
   purchase_price_type_id?:string;
   provider_name: string;
+  integration_id?: string;
+  connection_name?: string;
   auth_type: 'API_TOKEN' | 'SERVER_CREDENTIALS';
   server_url: string;
   api_token: string;
@@ -233,18 +235,18 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
   };
 
   // Open Configuration Modal
-  const handleOpenConfig = async (sys: any) => {
+  const handleOpenConfig = async (sys: any, record?: IntegrationRecord, createNew = false) => {
     setSelectedSystem(sys);
     // Lists come from whichever system is being set up, if it can give them.
-    const caps = getSavedRecord(sys.provider_name)?.capabilities;
+    const caps = record?.capabilities || getSavedRecord(sys.provider_name)?.capabilities;
     setPaymentTypes([]);
     setPaymentTypesError(null);
-    if (caps?.paymentTypes) api.getSalesDocPaymentTypes(sys.provider_name)
+    if (caps?.paymentTypes) api.getSalesDocPaymentTypes(sys.provider_name, record?.id)
       .then(r => setPaymentTypes(r.paymentTypes || []))
       .catch(err => setPaymentTypesError(err.message || 'xato'));
     setPriceTypes([]);
     setPriceTypesError(null);
-    if (caps?.priceTypes) api.getSalesDocPriceTypes(sys.provider_name)
+    if (caps?.priceTypes) api.getSalesDocPriceTypes(sys.provider_name, record?.id)
       .then(r => { setPriceTypes(r.priceTypes || []); setPriceTypesUsed(r.used || {}); })
       .catch(err => setPriceTypesError(err.message || 'xato'));
     setModalTestResult(null);
@@ -252,13 +254,15 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
     setShowToken(false);
 
     try {
-      const res = await api.getIntegrationConfig(sys.provider_name);
+      const res = createNew ? null : await api.getIntegrationConfig(sys.provider_name, record?.id);
       if (res && res.configured && res.config) {
         const c = res.config;
         setConfigForm({
-          forecast_days:c.forecast_days||100,order_date_field:c.order_date_field||'date',uy_oplata_mode:c.uy_oplata_mode||'',payment_cash_id:c.payment_cash_id||'',payment_terminal_id:c.payment_terminal_id||'',
-          sale_price_type_id:c.sale_price_type_id||'',purchase_price_type_id:c.purchase_price_type_id||'',
+          forecast_days:c.forecast_days||100,order_date_field:c.order_date_field||'date',payment_cash_id:c.payment_cash_id||'',payment_terminal_id:c.payment_terminal_id||'',
+          sale_price_type_id:c.sale_price_type_id||'',sale_price_type_ids:c.sale_price_type_ids||(c.sale_price_type_id?[c.sale_price_type_id]:[]),purchase_price_type_id:c.purchase_price_type_id||'',
           provider_name: sys.provider_name,
+          integration_id: record?.id,
+          connection_name: c.connection_name || '',
           auth_type: c.auth_type || 'API_TOKEN',
           server_url: c.server_url || sys.defaultUrl,
           api_token: '',
@@ -276,6 +280,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
       } else {
         setConfigForm({
           provider_name: sys.provider_name,
+          connection_name: '',
           // Linko hands out no API token; its cabinet signs in with server + login + password.
           auth_type: sys.provider_name === 'LINKO' ? 'SERVER_CREDENTIALS' : 'API_TOKEN',
           server_url: sys.defaultUrl,
@@ -292,6 +297,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
     } catch {
       setConfigForm({
         provider_name: sys.provider_name,
+        connection_name: '',
         auth_type: 'API_TOKEN',
         server_url: sys.defaultUrl,
         api_token: '',
@@ -313,7 +319,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
     setIsModalTesting(true);
     setModalTestResult(null);
     try {
-      const res = await api.testIntegrationConnection(configForm.provider_name, configForm);
+      const res = await api.testIntegrationConnection(configForm.provider_name, configForm, configForm.integration_id);
       setModalTestResult(res.result);
     } catch (err: any) {
       setModalTestResult({
@@ -351,12 +357,12 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
   };
 
   const [togglingProvider, setTogglingProvider] = useState<string | null>(null);
-  const handleToggleEnabled = async (providerName: string, enable: boolean) => {
+  const handleToggleEnabled = async (providerName: string, enable: boolean, integrationId?: string) => {
     if (!enable && !window.confirm(`${providerName} o‘chirilsinmi? Undan ma’lumot olinmaydi va unga to‘lov yuborilmaydi. Sozlamalar saqlanib qoladi.`)) return;
     setTogglingProvider(providerName);
     setStatusMessage(null);
     try {
-      const res = await api.setIntegrationEnabled(providerName, enable);
+      const res = await api.setIntegrationEnabled(providerName, enable, integrationId);
       setStatusMessage({ type: 'success', text: res.message });
       refreshDistribution();
       await fetchIntegrations();
@@ -388,11 +394,11 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
     }
   };
 
-  const handleSync = async (providerName: string) => {
+  const handleSync = async (providerName: string, integrationId?: string) => {
     setSyncingProvider(providerName);
     setStatusMessage(null);
     try {
-      const res: any = await api.syncIntegration(providerName);
+      const res: any = await api.syncIntegration(providerName, integrationId);
       const saved = getSavedRecord(providerName);
       const label = saved?.system_name || providerName;
       const r = res.result || {};
@@ -583,6 +589,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
           const isSyncing = syncingProvider === sys.provider_name;
           const isTesting = testingProvider === sys.provider_name;
           const saved = getSavedRecord(sys.provider_name);
+          const serverRecords = integrations.filter(i => i.provider_name.toUpperCase() === sys.provider_name.toUpperCase());
           const isConnected = saved?.status === 'CONNECTED';
           const authType = saved?.config?.auth_type || 'API_TOKEN';
 
@@ -624,6 +631,16 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
                     {sys.id}.* <ExternalLink className="w-3 h-3 ml-1" />
                   </a>
                 </div>
+
+                {serverRecords.length > 0 && <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3 text-xs">
+                  <div className="mb-1 font-bold text-indigo-900">Ulangan serverlar ({serverRecords.length})</div>
+                  {serverRecords.map((record: any) => <div key={record.id} className="flex items-center justify-between gap-2 border-t border-indigo-100 py-1.5">
+                    <span className="truncate">{record.config?.connection_name || record.system_name || record.provider_name} · {record.config?.server_url || 'server manzili'}</span>
+                    <span className="flex shrink-0 gap-2"><button type="button" className="font-semibold text-indigo-700 hover:underline" onClick={() => handleOpenConfig(sys, record)}>Tahrirlash</button>
+                    <button type="button" className="font-semibold text-amber-700 hover:underline" onClick={() => handleToggleEnabled(sys.provider_name, !!record.disabled, record.id)}>{record.disabled ? 'Yoqish' : 'O‘chirish'}</button>
+                    <button type="button" className="font-semibold text-emerald-700 hover:underline" onClick={() => handleSync(sys.provider_name, record.id)}>Sinxronlash</button></span>
+                  </div>)}
+                </div>}
 
                 <div className="mt-3">
                   <h3 className="text-base font-bold text-neutral-900 flex items-center gap-2">
@@ -693,6 +710,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
 
               {/* Action Buttons */}
               <div className="pt-3 border-t border-neutral-100 flex items-center gap-2">
+                <button type="button" onClick={() => handleOpenConfig(sys, undefined, true)} className="py-2 px-3 text-xs font-semibold text-indigo-700 border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 rounded-xl">+ Server qo‘shish</button>
                 <button
                   type="button"
                   onClick={() => handleOpenConfig(sys)}
@@ -705,7 +723,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
                 {saved && (
                   <button
                     type="button"
-                    onClick={() => handleToggleEnabled(sys.provider_name, !!saved.disabled)}
+                    onClick={() => handleToggleEnabled(sys.provider_name, !!saved.disabled, saved.id)}
                     disabled={togglingProvider === sys.provider_name}
                     className={`py-2 px-3 text-xs font-semibold rounded-xl transition border ${saved.disabled ? 'text-emerald-700 border-emerald-300 bg-emerald-50 hover:bg-emerald-100' : 'text-amber-700 border-amber-300 bg-white hover:bg-amber-50'}`}
                     title={saved.disabled ? 'Integratsiyani qayta yoqish' : 'Integratsiyani vaqtincha o‘chirish (sozlamalar saqlanadi)'}
@@ -782,6 +800,9 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
             </div>
 
             <form onSubmit={handleSaveConfig} className="mt-4 space-y-4">
+              <label className="block text-xs font-semibold text-neutral-700">Server nomi (masalan: Toshkent, 2-server)
+                <input type="text" className="mt-1 w-full rounded-lg border border-neutral-300 p-2" placeholder="Ulanish nomi" value={configForm.connection_name || ''} onChange={e => setConfigForm(p => ({...p, connection_name: e.target.value}))} />
+              </label>
               {/* Authentication Type Switcher (2 Tabs) */}
               <div>
                 <label className="block text-xs font-semibold text-neutral-700 mb-1.5">
@@ -980,7 +1001,6 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
                 <label>Prognoz davri (kalendar kun)<input type="number" min="1" max="3660" className="border rounded p-2 ml-2" value={configForm.forecast_days||100} onChange={e=>setConfigForm(p=>({...p,forecast_days:Number(e.target.value)}))}/></label>
                 <label>Kassa buyurtmasi sanasi<select className="border rounded p-2 ml-2" value={configForm.order_date_field||'date'} onChange={e=>setConfigForm(p=>({...p,order_date_field:e.target.value}))}><option value="date">Buyurtma sanasi</option><option value="dateLoad">Hujjat sanasi</option></select></label>
                 {showPayments && <>
-                <label>Uy oplata<select className="border rounded p-2 ml-2" value={configForm.uy_oplata_mode||''} onChange={e=>setConfigForm(p=>({...p,uy_oplata_mode:e.target.value}))}><option value="">Ma’nosini tanlang</option><option value="EXISTING">{sysName}da oldin qayd qilingan</option><option value="NEW">Yangi to‘lov — yuborilsin</option></select></label>
                 {/* Sending a payment needs the system's own payment type; the list comes from the system. */}
                 <label>Kassadagi naqd pul qaysi {sysName} to‘lov turiga yozilsin
                   <select className="border rounded p-2 ml-2" value={configForm.payment_cash_id||''} onChange={e=>setConfigForm(p=>({...p,payment_cash_id:e.target.value}))}>
@@ -1000,12 +1020,12 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
                 {caps && !caps.payments && <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-900">{sysName} hozircha kassadan to‘lov qabul qilmaydi — kassa to‘lovlari faqat shu dasturda saqlanadi.</p>}
                 {/* Prices: every price type is imported as is; these two say which is "sotuv narxi" and which "tannarx". */}
                 {showPrices && <>
-                <label>Sotuv narxi — {sysName} narx turi
-                  <select className="border rounded p-2 ml-2" value={configForm.sale_price_type_id||''} onChange={e=>setConfigForm(p=>({...p,sale_price_type_id:e.target.value}))}>
-                    <option value="">{priceTypes.length ? `Avtomatik${priceTypesUsed.sale ? ` (${priceTypes.find(t => t.id === priceTypesUsed.sale)?.name})` : ''}` : 'Ro‘yxat yuklanmoqda...'}</option>
-                    {priceTypes.map(t => <option key={t.id} value={t.id}>{t.name}{t.active ? '' : ' (nofaol)'} · {t.id}</option>)}
-                  </select>
-                </label>
+                <fieldset className="rounded-lg border border-neutral-200 p-3">
+                  <legend className="px-1 text-sm font-semibold">Sotuv narxlari — bir nechta tur tanlash mumkin</legend>
+                  <p className="mb-2 text-xs text-neutral-500">Tanlangan narx turlari mahsulotlarda alohida ko‘rinadi. Birinchi tanlangan tur asosiy sotuv narxi bo‘ladi.</p>
+                  {priceTypes.filter(t => t.kind === 'sale').map(t => <label key={t.id} className="flex items-center gap-2 py-1 text-sm"><input type="checkbox" checked={(configForm.sale_price_type_ids || (configForm.sale_price_type_id ? [configForm.sale_price_type_id] : [])).includes(t.id)} onChange={e => setConfigForm(p => { const old = p.sale_price_type_ids || (p.sale_price_type_id ? [p.sale_price_type_id] : []); const next = e.target.checked ? [...old, t.id] : old.filter(id => id !== t.id); return { ...p, sale_price_type_ids: next, sale_price_type_id: next[0] || '' }; })} />{t.name}{t.active ? '' : ' (nofaol)'} · {t.id}</label>)}
+                  {!priceTypes.some(t => t.kind === 'sale') && <p className="text-xs text-neutral-500">{priceTypes.length ? 'Sotuv narxi turi topilmadi.' : 'Narx turlari yuklanmoqda...'}</p>}
+                </fieldset>
                 <label>Kirim narxi (tannarx) — {sysName} narx turi
                   <select className="border rounded p-2 ml-2" value={configForm.purchase_price_type_id||''} onChange={e=>setConfigForm(p=>({...p,purchase_price_type_id:e.target.value}))}>
                     <option value="">{priceTypes.length ? `Avtomatik${priceTypesUsed.purchase ? ` (${priceTypes.find(t => t.id === priceTypesUsed.purchase)?.name})` : ' — topilmadi'}` : 'Ro‘yxat yuklanmoqda...'}</option>

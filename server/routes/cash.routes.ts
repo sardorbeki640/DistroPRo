@@ -98,13 +98,15 @@ router.get('/registry', requireAuth, requirePermission('cash', 'view'), (req: Re
     const agent_id = req.query.agent_id as string | undefined;
     const customer_id = req.query.customer_id as string | undefined;
     const search = req.query.search as string | undefined;
+    const integration_id = req.query.integration_id as string | undefined;
 
     const result = CashService.getRegistry(companyId, {
       from_date,
       to_date,
       agent_id,
       customer_id,
-      search
+      search,
+      integration_id
     });
 
     res.json({
@@ -129,7 +131,6 @@ router.post('/registry/orders', requireAuth, requirePermission('cash', 'create')
       order_number: req.body.order_number,
       sale_amount: req.body.sale_amount,
       cash_payment: req.body.cash_payment,
-      uy_oplata: req.body.uy_oplata,
       nasiya_perech: req.body.nasiya_perech,
       nasiyadan_kirim: req.body.nasiyadan_kirim,
       return_amount: req.body.return_amount,

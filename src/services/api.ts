@@ -195,8 +195,8 @@ export const api = {
   getSalesDocHistoryStatus: (provider?: string): Promise<{ configured: boolean; running?: boolean; history: any; system?: string }> => fetchApi(`/api/integrations/${encodeURIComponent(provider || 'active')}/history-status`),
   /** The connected distribution system (any: SalesDoctor, Linko, …): its name and what it can do. */
   getActiveDistribution: (): Promise<{ active: DistributionSystem | null; systems: (DistributionSystem & { status: string; disabled: boolean })[] }> => fetchApi('/api/integrations/active'),
-  getSalesDocPriceTypes: (provider = 'active'): Promise<{ system?: string; priceTypes: { id: string; name: string; kind: 'sale' | 'purchase'; active: boolean; currency?: string | null }[]; selected: { sale: string; purchase: string }; used: { sale: string | null; purchase: string | null } }> => fetchApi(`/api/integrations/${encodeURIComponent(provider)}/price-types`),
-  getSalesDocPaymentTypes: (provider = 'active'): Promise<{ system?: string; paymentTypes: { SD_id: string; name: string; active: boolean }[]; selected: { cash: string; terminal: string } }> => fetchApi(`/api/integrations/${encodeURIComponent(provider)}/payment-types`),
+  getSalesDocPriceTypes: (provider = 'active', integrationId?: string): Promise<{ system?: string; priceTypes: { id: string; name: string; kind: 'sale' | 'purchase'; active: boolean; currency?: string | null }[]; selected: { sale: string[]; purchase: string }; used: { sale: string | null; purchase: string | null } }> => fetchApi(`/api/integrations/${encodeURIComponent(provider)}/price-types${integrationId ? `?integration_id=${encodeURIComponent(integrationId)}` : ''}`),
+  getSalesDocPaymentTypes: (provider = 'active', integrationId?: string): Promise<{ system?: string; paymentTypes: { SD_id: string; name: string; active: boolean }[]; selected: { cash: string; terminal: string } }> => fetchApi(`/api/integrations/${encodeURIComponent(provider)}/payment-types${integrationId ? `?integration_id=${encodeURIComponent(integrationId)}` : ''}`),
   changePassword: (current_password: string, new_password: string): Promise<any> => fetchApi('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password, new_password }) }),
   getMyProfile: (): Promise<{ profile: { full_name: string; phone: string; email: string; login: string; position: string; last_login_at: string | null } }> => fetchApi('/api/staff/me/profile'),
   updateMyProfile: (body: { full_name?: string; phone?: string; email?: string; login?: string }): Promise<{ profile: { full_name: string; phone: string; email: string; login: string; position: string; last_login_at: string | null } }> =>
@@ -969,19 +969,21 @@ export const api = {
   },
 
   // Reports & Analytics
-  getProfitAndLossReport: async (from_date?: string, to_date?: string): Promise<{ report: any }> => {
+  getProfitAndLossReport: async (from_date?: string, to_date?: string, integration_id?: string): Promise<{ report: any }> => {
     const q = new URLSearchParams();
     if (from_date) q.set('from_date', from_date);
     if (to_date) q.set('to_date', to_date);
+    if (integration_id) q.set('integration_id', integration_id);
     const qs = q.toString() ? `?${q.toString()}` : '';
     return fetchApi(`/api/reports/pnl${qs}`);
   },
 
-  getGrossProfitReport: async (params?: { from_date?: string; to_date?: string; group_by?: 'AGENT' | 'TERRITORY' | 'CUSTOMER' }): Promise<{ rows: any[] }> => {
+  getGrossProfitReport: async (params?: { from_date?: string; to_date?: string; group_by?: 'AGENT' | 'TERRITORY' | 'CUSTOMER'; integration_id?: string }): Promise<{ rows: any[] }> => {
     const q = new URLSearchParams();
     if (params?.from_date) q.set('from_date', params.from_date);
     if (params?.to_date) q.set('to_date', params.to_date);
     if (params?.group_by) q.set('group_by', params.group_by);
+    if (params?.integration_id) q.set('integration_id', params.integration_id);
     const qs = q.toString() ? `?${q.toString()}` : '';
     return fetchApi(`/api/reports/gross-profit${qs}`);
   },
@@ -1044,6 +1046,7 @@ export const api = {
     agent_id?: string;
     customer_id?: string;
     search?: string;
+    integration_id?: string;
   } = {}): Promise<{
     total_sales: number;
     total_inflow: number;
@@ -1057,6 +1060,7 @@ export const api = {
     if (filters.agent_id) q.set('agent_id', filters.agent_id);
     if (filters.customer_id) q.set('customer_id', filters.customer_id);
     if (filters.search) q.set('search', filters.search);
+    if (filters.integration_id) q.set('integration_id', filters.integration_id);
     const qs = q.toString() ? `?${q.toString()}` : '';
     return fetchApi(`/api/cash/registry${qs}`);
   },
@@ -1135,15 +1139,17 @@ export const api = {
     return fetchApi('/api/integrations/list');
   },
 
-  getIntegrationConfig: async (providerName: string): Promise<{
+  getIntegrationConfig: async (providerName: string, integration_id?: string): Promise<{
     configured: boolean;
     config: any;
   }> => {
-    return fetchApi(`/api/integrations/config/${encodeURIComponent(providerName)}`);
+    return fetchApi(`/api/integrations/config/${encodeURIComponent(providerName)}${integration_id ? `?integration_id=${encodeURIComponent(integration_id)}` : ''}`);
   },
 
   saveIntegrationConfig: async (data: {
     provider_name: string;
+    integration_id?: string;
+    connection_name?: string;
     auth_type: 'API_TOKEN' | 'SERVER_CREDENTIALS';
     server_url: string;
     api_token?: string;
@@ -1163,28 +1169,28 @@ export const api = {
     });
   },
 
-  testIntegrationConnection: async (providerName: string, config?: any): Promise<{
+  testIntegrationConnection: async (providerName: string, config?: any, integration_id?: string): Promise<{
     result: { ok: boolean; message: string; latencyMs?: number; syncCoefficient?: number; details?: any };
   }> => {
     return fetchApi('/api/integrations/test-connection', {
       method: 'POST',
-      body: JSON.stringify({ provider_name: providerName, config })
+      body: JSON.stringify({ provider_name: providerName, config, integration_id })
     });
   },
 
-  setIntegrationEnabled: async (providerName: string, enabled: boolean): Promise<{ success: boolean; message: string }> => {
+  setIntegrationEnabled: async (providerName: string, enabled: boolean, integrationId?: string): Promise<{ success: boolean; message: string }> => {
     return fetchApi(`/api/integrations/${encodeURIComponent(providerName)}/enabled`, {
       method: 'POST',
-      body: JSON.stringify({ enabled })
+      body: JSON.stringify({ enabled, integration_id: integrationId })
     });
   },
 
-  syncIntegration: async (providerName: string): Promise<{
+  syncIntegration: async (providerName: string, integration_id?: string): Promise<{
     result: { provider: string; status: string; recordsImported: number; recordsFailed: number };
   }> => {
     return fetchApi('/api/integrations/sync', {
       method: 'POST',
-      body: JSON.stringify({ provider_name: providerName })
+      body: JSON.stringify({ provider_name: providerName, integration_id })
     });
   },
 
@@ -1237,4 +1243,3 @@ export const api = {
     });
   }
 };
-

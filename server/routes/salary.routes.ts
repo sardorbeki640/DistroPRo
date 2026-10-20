@@ -3,6 +3,7 @@ import { businessToday } from '../utils/date.ts';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { requireAuth, requirePermission } from '../middleware/auth.middleware.ts';
+import { AuthService } from '../services/auth.service.ts';
 import { SalaryService, cleanPayComponents } from '../services/salary.service.ts';
 import { isValidIsoDate } from '../utils/date.ts';
 import { db } from '../db/database.ts';
@@ -369,10 +370,19 @@ router.get('/pay-options', requireAuth, requirePermission('employee', 'view'), (
 /**
  * GET /api/salaries/cabinet/:employeeId - Employee personal cabinet (Read-only for Dostavchik/Agent)
  */
-router.get('/cabinet/:employeeId', requireAuth, requirePermission('salary', 'view'), (req: Request, res: Response, next) => {
+router.get('/cabinet/:employeeId', requireAuth, (req: Request, res: Response, next) => {
   try {
+    const employeeId = req.params.employeeId;
+    const actor = AuthService.getUserPermissions(req.user!.userId);
+    const employee = db.findOne('employees', e => e.id === employeeId && e.company_id === req.user!.companyId);
+    const isSelf = actor.employee_id === employeeId || employee?.user_id === actor.id;
+    const isManager = actor.is_super_admin || actor.roles.some(r => r.name === 'ADMIN');
+    if (!isSelf && !isManager && !AuthService.hasPermission(actor.id, 'salary', 'view')) {
+      res.status(403).json({ success: false, error: 'Faqat o‘z ma’lumotlaringizni ko‘rishingiz mumkin.' });
+      return;
+    }
     const month = req.query.month as string;
-    const cabinet = SalaryService.getEmployeePersonalCabinet(req.user!.companyId, req.params.employeeId, month);
+    const cabinet = SalaryService.getEmployeePersonalCabinet(req.user!.companyId, employeeId, month);
     res.json({
       success: true,
       ...cabinet

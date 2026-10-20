@@ -19,8 +19,9 @@ router.get('/pnl', requireAuth, requirePermission('reports', 'view'), (req: Requ
   try {
     const fromDate = (req.query.from_date as string) || businessToday().slice(0, 8) + '01';
     const toDate = (req.query.to_date as string) || businessToday();
+    const integrationId = req.query.integration_id ? String(req.query.integration_id) : undefined;
 
-    const pnl = AnalyticsService.getProfitAndLoss(req.user!.companyId, fromDate, toDate);
+    const pnl = AnalyticsService.getProfitAndLoss(req.user!.companyId, fromDate, toDate, integrationId);
     res.json({
       success: true,
       report: pnl
@@ -84,8 +85,9 @@ router.get('/gross-profit', requireAuth, requirePermission('reports', 'view'), (
     const fromDate = (req.query.from_date as string) || businessToday().slice(0, 8) + '01';
     const toDate = (req.query.to_date as string) || businessToday();
     const groupBy = (req.query.group_by as 'AGENT' | 'TERRITORY' | 'CUSTOMER') || 'AGENT';
+    const integrationId = req.query.integration_id ? String(req.query.integration_id) : undefined;
 
-    const breakdown = AnalyticsService.getGrossProfitBreakdown(req.user!.companyId, groupBy, fromDate, toDate);
+    const breakdown = AnalyticsService.getGrossProfitBreakdown(req.user!.companyId, groupBy, fromDate, toDate, integrationId);
     res.json({
       success: true,
       rows: breakdown

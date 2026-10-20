@@ -14,7 +14,7 @@ function isExplicitRefusal(job: { refused?: boolean | null; error_message?: stri
   return !/tarmoq xatosi|timeout|vaqti tugadi|HTTP 5\d\d/i.test(message);
 }
 
-const METHOD_LABEL: Record<string, string> = { CASH: 'naqd', TERMINAL: 'terminal', CLICK: 'Click', OLD_DEBT: 'eski qarz', HOME: 'uy oplata' };
+const METHOD_LABEL: Record<string, string> = { CASH: 'naqd', TERMINAL: 'terminal', CLICK: 'Click', OLD_DEBT: 'eski qarz' };
 const jobId = (integrationId: string, rowId: string, method: string) => 'cash-post:' + createHash('sha256').update(`${integrationId}:${rowId}:${method}`).digest('hex').slice(0, 32);
 const same = (r: RemotePayment, code: string) => r.code_1C === code;
 
@@ -74,8 +74,7 @@ export class CashPostingService {
       };
 
       for (const row of rows) {
-        if ((row.uy_oplata || 0) > 0 && !['EXISTING', 'NEW'].includes(config.uy_oplata_mode)) throw new Error('Kassa saqlangan. “Uy oplata” oldin to‘langanmi yoki yangi to‘lovmi — integratsiya sozlamasida belgilang.');
-        const amounts = { CASH: Number(row.cash_payment || 0), TERMINAL: Number(row.terminal_click ?? row.terminal_payment ?? 0), CLICK: Number(row.click_payment || 0), OLD_DEBT: Number(row.nasiyadan_kirim || 0), HOME: config.uy_oplata_mode === 'NEW' ? Number(row.uy_oplata || 0) : 0 };
+        const amounts = { CASH: Number(row.cash_payment || 0), TERMINAL: Number(row.terminal_click ?? row.terminal_payment ?? 0), CLICK: Number(row.click_payment || 0), OLD_DEBT: Number(row.nasiyadan_kirim || 0) };
         for (const [method, amount] of Object.entries(amounts)) {
           const id = jobId(integration.id, row.id, method);
           seen.add(id);

@@ -85,12 +85,12 @@ export class AnalyticsService {
   /**
    * Generates Executive Profit & Loss (P&L) Statement
    */
-  public static getProfitAndLoss(company_id: string, fromDate: string, toDate: string): ProfitAndLossReport {
+  public static getProfitAndLoss(company_id: string, fromDate: string, toDate: string, integrationId?: string): ProfitAndLossReport {
     // 1. Revenue is recognised on delivery. Pending orders are reported separately, cancelled ones ignored.
     const inPeriod = db.find('sales_orders', o =>
       o.company_id === company_id &&
       o.order_date >= fromDate &&
-      o.order_date <= toDate
+      o.order_date <= toDate && (!integrationId || o.source_integration_id === integrationId)
     );
     const orders = inPeriod.filter(o => o.status === 'DELIVERED');
     const pendingSales = inPeriod.filter(o => o.status === 'PENDING').reduce((s, o) => s + (o.total_sales || 0), 0);
@@ -114,7 +114,7 @@ export class AnalyticsService {
     // Without imported orders, the cash registry still gives revenue — but no cost.
     if (orders.length === 0) {
       const dailyOrders = db.find('daily_order_entries', o =>
-        o.company_id === company_id && o.order_date >= fromDate && o.order_date <= toDate && o.status !== 'CANCELLED'
+        o.company_id === company_id && o.order_date >= fromDate && o.order_date <= toDate && o.status !== 'CANCELLED' && (!integrationId || o.integration_id === integrationId)
       );
       for (const d of dailyOrders) {
         grossSales += (d.sale_amount || 0);
@@ -220,13 +220,14 @@ export class AnalyticsService {
     company_id: string,
     groupBy: 'AGENT' | 'TERRITORY' | 'CUSTOMER',
     fromDate: string,
-    toDate: string
+    toDate: string,
+    integrationId?: string
   ): GrossProfitReportRow[] {
     const orders = db.find('sales_orders', o =>
       o.company_id === company_id &&
       o.order_date >= fromDate &&
       o.order_date <= toDate &&
-      o.status === 'DELIVERED'
+      o.status === 'DELIVERED' && (!integrationId || o.source_integration_id === integrationId)
     );
 
     const groupMap = new Map<string, {
