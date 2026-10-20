@@ -17,8 +17,8 @@ function assertPeriod(p: Period, name: string) {
  * cancelled: the distribution system marks orders delivered days later, so counting delivered ones only makes the
  * latest days look like a fall. Delivered and still-on-the-way parts are kept apart.
  */
-function periodFacts(companyId: string, p: Period) {
-  const orders = db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && o.order_date >= p.from && o.order_date <= p.to);
+function periodFacts(companyId: string, p: Period, integrationId?: string) {
+  const orders = db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && o.order_date >= p.from && o.order_date <= p.to && (!integrationId || o.source_integration_id === integrationId));
   const pending = orders.filter(o => o.status !== 'DELIVERED');
   const net = (o: any) => (o.total_sales || 0) - (o.discount_amount || 0) - (o.return_amount || 0);
   const byCustomer = new Map<string, { sales: number; orders: number }>();
@@ -58,9 +58,9 @@ function periodFacts(companyId: string, p: Period) {
  * Sales split by team (product category -> team) per agent profile. An order's discounts and returns are shared
  * among its lines by amount; an order without lines (its products unknown) counts in "other".
  */
-function teamSplit(companyId: string, orders: any[], teamOf: Map<string, string>) {
+function teamSplit(companyId: string, orders: any[], teamOf: Map<string, string>, integrationId?: string) {
   const net = (o: any) => (o.total_sales || 0) - (o.discount_amount || 0) - (o.return_amount || 0);
-  const categoryBySku = new Map(db.find('products', p => p.company_id === companyId).map(p => [p.sku, String(p.category || '').replace(/\s+/g, ' ').trim()]));
+  const categoryBySku = new Map(db.find('products', p => p.company_id === companyId && (!integrationId || p.source_integration_id === integrationId)).map(p => [p.sku, String(p.category || '').replace(/\s+/g, ' ').trim()]));
   const byOrder = new Map(orders.map(o => [o.id, o]));
   const out = new Map<string, { sales: number; orders: Set<string>; customers: Set<string> }>();
   const add = (o: any, team: string, amount: number) => {
@@ -93,11 +93,11 @@ export function teamMemberSales(companyId: string, agentId: string, teamId: stri
 }
 
 /** Rows "agent × team" for both periods (only when the company has teams). */
-function agentTeamRows(companyId: string, ordersA: any[], ordersB: any[], agentId?: string) {
+function agentTeamRows(companyId: string, ordersA: any[], ordersB: any[], agentId?: string, integrationId?: string) {
   const teams = TeamsService.list(companyId);
   if (!teams.length) return [];
   const teamOf = TeamsService.teamOfCategory(companyId);
-  const sa = teamSplit(companyId, ordersA, teamOf), sb = teamSplit(companyId, ordersB, teamOf);
+  const sa = teamSplit(companyId, ordersA, teamOf, integrationId), sb = teamSplit(companyId, ordersB, teamOf, integrationId);
   const keys = new Set([...sa.keys(), ...sb.keys()]);
   const order = new Map(teams.map((t, i) => [t.id, i]));
   return [...keys].filter(k => !agentId || k.startsWith(`${agentId}|`)).map(k => {
@@ -117,17 +117,17 @@ function agentTeamRows(companyId: string, ordersA: any[], ordersB: any[], agentI
  * Side-by-side comparison of two periods: P&L lines, expenses by category, agents, products and customers.
  * Period A is the earlier/base one, B the one being judged (like "first period / second period").
  */
-export function comparePeriods(companyId: string, a: Period, b: Period) {
+export function comparePeriods(companyId: string, a: Period, b: Period, integrationId?: string) {
   assertPeriod(a, 'Birinchi davr');
   assertPeriod(b, 'Ikkinchi davr');
-  const pa = AnalyticsService.getProfitAndLoss(companyId, a.from, a.to);
-  const pb = AnalyticsService.getProfitAndLoss(companyId, b.from, b.to);
-  const fa = periodFacts(companyId, a);
-  const fb = periodFacts(companyId, b);
+  const pa = AnalyticsService.getProfitAndLoss(companyId, a.from, a.to, integrationId);
+  const pb = AnalyticsService.getProfitAndLoss(companyId, b.from, b.to, integrationId);
+  const fa = periodFacts(companyId, a, integrationId);
+  const fb = periodFacts(companyId, b, integrationId);
 
   // Customers who bought before period A: anyone without earlier delivered orders counts as new.
   const firstOrder = new Map<string, string>();
-  for (const o of db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED')) {
+  for (const o of db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && (!integrationId || o.source_integration_id === integrationId))) {
     const prev = firstOrder.get(o.customer_id);
     if (!prev || o.order_date < prev) firstOrder.set(o.customer_id, o.order_date);
   }
@@ -213,7 +213,7 @@ export function comparePeriods(companyId: string, a: Period, b: Period) {
     lines,
     agents,
     // One agent profile shared by several people: its sales by team (product categories of each team).
-    agent_teams: agentTeamRows(companyId, fa.orders, fb.orders),
+    agent_teams: agentTeamRows(companyId, fa.orders, fb.orders, undefined, integrationId),
     products: { gainers: byDiff.filter(p => p.diff > 0).slice(0, 15), losers: byDiff.filter(p => p.diff < 0).reverse().slice(0, 15) },
     customers: {
       stopped: declining.filter(r => r.sales_b === 0).length,
@@ -227,22 +227,22 @@ export function comparePeriods(companyId: string, a: Period, b: Period) {
  * by category and product, and the customers who stopped, started, bought less or more. Same rule as the agents table:
  * every order that was not cancelled counts as sales.
  */
-export function compareAgent(companyId: string, agentId: string, a: Period, b: Period) {
+export function compareAgent(companyId: string, agentId: string, a: Period, b: Period, integrationId?: string) {
   assertPeriod(a, 'Birinchi davr');
   assertPeriod(b, 'Ikkinchi davr');
   const agent = agentId === 'none' ? null : db.findById('agents', agentId);
   if (agentId !== 'none' && (!agent || agent.company_id !== companyId)) throw Object.assign(new Error('Agent topilmadi'), { status: 404 });
   const net = (o: any) => (o.total_sales || 0) - (o.discount_amount || 0) - (o.return_amount || 0);
   const mine = (o: any) => (agentId === 'none' ? !o.agent_id : o.agent_id === agentId);
-  const productBySku = new Map(db.find('products', p => p.company_id === companyId).map(p => [p.sku, p]));
+  const productBySku = new Map(db.find('products', p => p.company_id === companyId && (!integrationId || p.source_integration_id === integrationId)).map(p => [p.sku, p]));
   const firstOrder = new Map<string, string>();
-  for (const o of db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && mine(o))) {
+  for (const o of db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && mine(o) && (!integrationId || o.source_integration_id === integrationId))) {
     const prev = firstOrder.get(o.customer_id);
     if (!prev || o.order_date < prev) firstOrder.set(o.customer_id, o.order_date);
   }
 
   const facts = (p: Period) => {
-    const all = db.find('sales_orders', o => o.company_id === companyId && mine(o) && o.order_date >= p.from && o.order_date <= p.to);
+    const all = db.find('sales_orders', o => o.company_id === companyId && mine(o) && o.order_date >= p.from && o.order_date <= p.to && (!integrationId || o.source_integration_id === integrationId));
     const orders = all.filter(o => o.status !== 'CANCELLED');
     const cancelled = all.filter(o => o.status === 'CANCELLED');
     const delivered = orders.filter(o => o.status === 'DELIVERED');
@@ -321,7 +321,7 @@ export function compareAgent(companyId: string, agentId: string, a: Period, b: P
     agent: { id: agentId, name: agent?.full_name || 'Agentsiz', code: agent?.code || null, phone: agent?.phone || null },
     periods: { a, b }, days: { a: dayCount(a), b: dayCount(b) },
     totals: { a: fa.totals, b: fb.totals },
-    teams: agentTeamRows(companyId, fa.orders, fb.orders, agentId),
+    teams: agentTeamRows(companyId, fa.orders, fb.orders, agentId, integrationId),
     daily,
     categories: [...categories].map(([name, v]) => ({ name, sales_a: v.a, sales_b: v.b, diff: v.b - v.a })).sort((p, q) => q.sales_b - p.sales_b),
     products: { gainers: products.filter(p => p.diff > 0).slice(0, 10), losers: products.filter(p => p.diff < 0).reverse().slice(0, 10), count_a: fa.byProduct.size, count_b: fb.byProduct.size },

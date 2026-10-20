@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { localToday } from '../../utils/date';
 import { 
   PlusCircle, 
@@ -100,9 +100,21 @@ export const CashView: React.FC<CashViewProps> = ({
   const [selectedAgent, setSelectedAgent] = useState<string>('');
   const [selectedCustomer, setSelectedCustomer] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [serverFilter, setServerFilter] = useState('');
+  const [serverFilter, setServerFilter] = useState<string | null>(null);
   const [serverOptions, setServerOptions] = useState<any[]>([]);
-  useEffect(() => { api.getIntegrations().then(r => setServerOptions(r.integrations || [])).catch(() => {}); }, []);
+  const registryRequestSequence = useRef(0);
+  useEffect(() => {
+    let alive = true;
+    Promise.all([api.getIntegrations().catch(() => ({ integrations: [] })), api.getActiveDistribution()]).then(([list, distribution]) => {
+      if (!alive) return;
+      setServerOptions((list.integrations || []).filter((i: any) => !i.disabled));
+      setServerFilter(distribution.active?.id || '');
+    }).catch((e: any) => {
+      if (!alive) return;
+      setError(e.message || 'Joriy serverni aniqlab bo‘lmadi');
+    });
+    return () => { alive = false; };
+  }, []);
   const [quickFilter, setQuickFilter] = useState<'ALL' | 'DEBTORS' | 'CASH' | 'RETURNS'>('ALL');
 
   // Security Director PIN modal for reopening closed days
@@ -191,6 +203,8 @@ export const CashView: React.FC<CashViewProps> = ({
 
   // Fetch detail registry data
   const fetchRegistry = async (from = fromDate, to = toDate) => {
+    if (serverFilter === null) return;
+    const requestId = ++registryRequestSequence.current;
     setLoading(true);
     setError(null);
     try {
@@ -203,17 +217,19 @@ export const CashView: React.FC<CashViewProps> = ({
         integration_id: serverFilter || undefined
       });
 
-      setRegistryItems(res.items || []);
-      setSummaryData({
-        total_sales: res.total_sales || 0,
-        total_inflow: res.total_inflow || 0,
-        total_debt: res.total_debt || 0,
-        totals: res.totals || {}
-      });
+      if (requestId === registryRequestSequence.current) {
+        setRegistryItems(res.items || []);
+        setSummaryData({
+          total_sales: res.total_sales || 0,
+          total_inflow: res.total_inflow || 0,
+          total_debt: res.total_debt || 0,
+          totals: res.totals || {}
+        });
+      }
     } catch (err: any) {
-      setError(err.message || 'Reestr ma\'lumotlarini yuklashda xatolik yuz berdi');
+      if (requestId === registryRequestSequence.current) setError(err.message || 'Reestr ma\'lumotlarini yuklashda xatolik yuz berdi');
     } finally {
-      setLoading(false);
+      if (requestId === registryRequestSequence.current) setLoading(false);
     }
   };
 
@@ -812,7 +828,7 @@ export const CashView: React.FC<CashViewProps> = ({
           {/* Filters Bar: Quick Status pills, Search, Agent, Customer */}
           <div className="bg-white p-4 rounded-2xl border border-neutral-200 shadow-xs space-y-3">
             <label className="text-xs font-semibold text-neutral-600">Server bo‘yicha
-              <select className="ml-2 rounded-lg border border-neutral-300 p-2" value={serverFilter} onChange={e => setServerFilter(e.target.value)}>
+              <select aria-label="Reestr serveri" className="ml-2 rounded-lg border border-neutral-300 p-2" value={serverFilter || ''} disabled={serverFilter === null} onChange={e => { registryRequestSequence.current++; setRegistryItems([]); setSummaryData({ total_sales: 0, total_inflow: 0, total_debt: 0, totals: {} }); setServerFilter(e.target.value); }}>
                 <option value="">Barcha serverlar</option>
                 {serverOptions.map((i: any) => <option key={i.id} value={i.id}>{i.config?.connection_name || i.system_name || i.provider_name}</option>)}
               </select>

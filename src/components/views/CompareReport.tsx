@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Download, RefreshCw, Users } from 'lucide-react';
 import { api } from '../../services/api.ts';
 import { localToday } from '../../utils/date';
@@ -70,13 +70,43 @@ export const CompareReport: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [agent, setAgent] = useState<string | null>(null);
   const [teamsOpen, setTeamsOpen] = useState(false);
+  const [serverOptions, setServerOptions] = useState<any[]>([]);
+  const [integrationId, setIntegrationId] = useState<string | null>(null);
+  const requestSequence = useRef(0);
 
-  const load = async (pa = a, pb = b) => {
+  useEffect(() => {
+    let alive = true;
+    Promise.all([api.getIntegrations().catch(() => ({ integrations: [] })), api.getActiveDistribution()]).then(([list, distribution]) => {
+      if (!alive) return;
+      const options = (list.integrations || []).filter((i: any) => !i.disabled);
+      if (distribution.active && !options.some((i: any) => i.id === distribution.active!.id)) {
+        options.push({ ...distribution.active, provider_name: distribution.active.provider, system_name: distribution.active.name, config: {} });
+      }
+      setServerOptions(options);
+      setIntegrationId(distribution.active?.id || 'all');
+    }).catch((e: any) => {
+      if (!alive) return;
+      setError(e.message || 'Joriy serverni aniqlab bo‘lmadi. Server filtri aniqlanmaguncha ma’lumot yuklanmaydi.');
+    });
+    return () => { alive = false; };
+  }, []);
+
+  const load = async (pa = a, pb = b, server = integrationId) => {
+    if (server === null) return;
+    const requestId = ++requestSequence.current;
     setLoading(true);
     setError(null);
-    try { setData(await api.getCompareReport(pa, pb)); } catch (e: any) { setError(e.message); } finally { setLoading(false); }
+    setData(null);
+    try {
+      const result = await api.getCompareReport(pa, pb, server === 'all' ? null : server);
+      if (requestId === requestSequence.current) setData(result);
+    } catch (e: any) {
+      if (requestId === requestSequence.current) setError(e.message);
+    } finally {
+      if (requestId === requestSequence.current) setLoading(false);
+    }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { if (integrationId !== null) load(a, b, integrationId); }, [integrationId]);
   const choose = (k: string) => { setKind(k); const p = preset(k); setA(p.a); setB(p.b); load(p.a, p.b); };
 
   // The territory column appears only when customers have territories at all.
@@ -178,6 +208,11 @@ export const CompareReport: React.FC = () => {
           {PRESETS.map(([k, label]) => <button key={k} onClick={() => choose(k)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${kind === k ? 'bg-neutral-900 text-white' : 'bg-neutral-100 hover:bg-neutral-200'}`}>{label}</button>)}
         </div>
         <div className="flex flex-wrap items-end gap-4 text-xs">
+          <div><p className="mb-1 font-bold text-neutral-600">Server</p><select aria-label="Taqqoslash serveri" className={input} value={integrationId ?? ''} disabled={integrationId === null} onChange={e => { setData(null); setError(null); setIntegrationId(e.target.value); }}>
+            {integrationId === null && <option value="">Yuklanmoqda…</option>}
+            <option value="all">Barcha serverlar</option>
+            {serverOptions.map((i: any) => <option key={i.id} value={i.id}>{i.config?.connection_name || i.system_name || i.provider_name}</option>)}
+          </select></div>
           <div><p className="mb-1 font-bold text-neutral-600">Birinchi davr (asos)</p><input type="date" className={input} value={a.from} onChange={e => { setKind('custom'); setA({ ...a, from: e.target.value }); }} /> — <input type="date" className={input} value={a.to} onChange={e => { setKind('custom'); setA({ ...a, to: e.target.value }); }} /></div>
           <div><p className="mb-1 font-bold text-neutral-600">Ikkinchi davr (solishtiriladi)</p><input type="date" className={input} value={b.from} onChange={e => { setKind('custom'); setB({ ...b, from: e.target.value }); }} /> — <input type="date" className={input} value={b.to} onChange={e => { setKind('custom'); setB({ ...b, to: e.target.value }); }} /></div>
           <button onClick={() => load()} className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 font-semibold text-white hover:bg-emerald-700"><RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />Solishtirish</button>
@@ -190,7 +225,7 @@ export const CompareReport: React.FC = () => {
 
       {error && <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">{error}</div>}
       {/* The periods of the loaded table, not the date inputs being edited. */}
-      {agent && data && <AgentDetail agentId={agent} a={data.periods.a} b={data.periods.b} onClose={() => setAgent(null)} />}
+      {agent && data && <AgentDetail agentId={agent} a={data.periods.a} b={data.periods.b} integrationId={integrationId === 'all' ? null : integrationId} onClose={() => setAgent(null)} />}
       {teamsOpen && <TeamsEditor onClose={() => setTeamsOpen(false)} onSaved={() => load()} />}
 
       {data && (

@@ -988,8 +988,11 @@ export const api = {
     return fetchApi(`/api/reports/gross-profit${qs}`);
   },
 
-  getCompareReport: (a: { from: string; to: string }, b: { from: string; to: string }): Promise<any> =>
-    fetchApi('/api/reports/compare?' + new URLSearchParams({ a_from: a.from, a_to: a.to, b_from: b.from, b_to: b.to }).toString()),
+  getCompareReport: (a: { from: string; to: string }, b: { from: string; to: string }, integrationId?: string | null): Promise<any> => {
+    const q = new URLSearchParams({ a_from: a.from, a_to: a.to, b_from: b.from, b_to: b.to });
+    if (integrationId !== undefined) q.set('integration_id', integrationId || 'all');
+    return fetchApi('/api/reports/compare?' + q.toString());
+  },
   /** Sales teams: product categories of each team, and the person of each agent profile in it. */
   getTeams: (): Promise<{ teams: { id: string; name: string; categories: string[]; members: Record<string, string>; member_employees?: Record<string, string> }[]; categories: { name: string; team_id: string | null }[]; agents: { id: string; name: string; code: string }[]; employees: { id: string; name: string; position: string }[] }> =>
     fetchApi('/api/reports/teams'),
@@ -998,11 +1001,14 @@ export const api = {
   /** The signed-in agent's own results (this month against last month) and the current AI strategy. */
   getMyPerformance: (): Promise<{ agent: { id: string; name: string } | null; data?: any; strategy?: any }> => fetchApi('/api/staff/me/performance'),
   /** A growth strategy for one agent, written by the company's AI from the agent's numbers. */
-  getAgentStrategy: (agentId: string, a: { from: string; to: string }, b: { from: string; to: string }, force = false): Promise<{ strategy: any; model: string; generated_at: string; cached: boolean }> =>
-    fetchApi(`/api/reports/compare/agent/${encodeURIComponent(agentId)}/strategy`, { method: 'POST', body: JSON.stringify({ a, b, force }) }),
+  getAgentStrategy: (agentId: string, a: { from: string; to: string }, b: { from: string; to: string }, force = false, integrationId?: string | null): Promise<{ strategy: any; model: string; generated_at: string; cached: boolean }> =>
+    fetchApi(`/api/reports/compare/agent/${encodeURIComponent(agentId)}/strategy`, { method: 'POST', body: JSON.stringify({ a, b, force, ...(integrationId !== undefined ? { integration_id: integrationId || 'all' } : {}) }) }),
   /** One agent of the comparison in depth. */
-  getCompareAgent: (agentId: string, a: { from: string; to: string }, b: { from: string; to: string }): Promise<any> =>
-    fetchApi(`/api/reports/compare/agent/${encodeURIComponent(agentId)}?` + new URLSearchParams({ a_from: a.from, a_to: a.to, b_from: b.from, b_to: b.to }).toString()),
+  getCompareAgent: (agentId: string, a: { from: string; to: string }, b: { from: string; to: string }, integrationId?: string | null): Promise<any> => {
+    const q = new URLSearchParams({ a_from: a.from, a_to: a.to, b_from: b.from, b_to: b.to });
+    if (integrationId !== undefined) q.set('integration_id', integrationId || 'all');
+    return fetchApi(`/api/reports/compare/agent/${encodeURIComponent(agentId)}?` + q.toString());
+  },
 
   getAgingReport: async (as_of_date?: string): Promise<{ as_of_date: string; rows: any[] }> => {
     const qs = as_of_date ? `?as_of_date=${encodeURIComponent(as_of_date)}` : '';

@@ -50,9 +50,9 @@ const arr = (v: any) => (Array.isArray(v) ? v : []);
 const str = (v: any) => String(v ?? '').trim();
 
 /** The facts the AI gets: compact, only what matters for a growth plan. */
-export function strategyFacts(companyId: string, agentId: string, a: Period, b: Period) {
-  const d: any = compareAgent(companyId, agentId, a, b);
-  const all: any = comparePeriods(companyId, a, b);
+export function strategyFacts(companyId: string, agentId: string, a: Period, b: Period, integrationId?: string) {
+  const d: any = compareAgent(companyId, agentId, a, b, integrationId);
+  const all: any = comparePeriods(companyId, a, b, integrationId);
   const ranked = [...all.agents].sort((p: any, q: any) => q.sales_b - p.sales_b);
   const avgB = ranked.length ? Math.round(ranked.reduce((s: number, r: any) => s + r.sales_b, 0) / ranked.length) : 0;
   const round = (x: number) => Math.round(x || 0);
@@ -188,17 +188,17 @@ export function myPerformance(companyId: string, userId: string) {
  * Kept for a few hours per agent and periods; "force" writes a new one. For this month's periods it is also stored
  * as the agent's current strategy.
  */
-export async function agentStrategy(companyId: string, agentId: string, a: Period, b: Period, force = false, known?: ReturnType<typeof strategyFacts>) {
-  const key = `${companyId}|${agentId}|${a.from}|${a.to}|${b.from}|${b.to}`;
+export async function agentStrategy(companyId: string, agentId: string, a: Period, b: Period, force = false, known?: ReturnType<typeof strategyFacts>, integrationId?: string) {
+  const key = `${companyId}|${agentId}|${integrationId || 'all'}|${a.from}|${a.to}|${b.from}|${b.to}`;
   const hit = cache.get(key);
   if (!force && hit && Date.now() - hit.at < CACHE_MS) return { ...hit.result, cached: true };
   // This month's strategy kept by the automatic refresh is reused as long as the numbers did not change.
-  const stored = storedStrategy(companyId, agentId);
+  const stored = integrationId ? null : storedStrategy(companyId, agentId);
   if (!force && stored && stored.periods.a.from === a.from && stored.periods.a.to === a.to && stored.periods.b.from === b.from && stored.periods.b.to === b.to) {
     return { strategy: stored.strategy, model: stored.model, generated_at: stored.generated_at, cached: true, automatic: true, history: stored.history };
   }
   if (!JarvisService.ready(companyId)) throw Object.assign(new Error('AI ulanmagan. Jarvis → Sozlamalar bo‘limida AI xizmati, model va kalitni kiriting.'), { status: 400 });
-  const facts = known || strategyFacts(companyId, agentId, a, b);
+  const facts = known || strategyFacts(companyId, agentId, a, b, integrationId);
   const prompt = `Agent ma’lumotlari (JSON, summalar so‘mda):\n${JSON.stringify(facts)}`;
   let { text, model } = await JarvisService.complete(companyId, SYSTEM, prompt, 8000, true);
   let raw: any;
@@ -222,6 +222,6 @@ export async function agentStrategy(companyId: string, agentId: string, a: Perio
   cache.set(key, { at: Date.now(), result });
   // Written by hand for this month's periods: it becomes the agent's current strategy too.
   const def = defaultPeriods();
-  if (!known && def.a.from === a.from && def.a.to === a.to && def.b.from === b.from && def.b.to === b.to) store(companyId, agentId, def, result, signatureOf(facts), (facts.totals.second as any).sales);
+  if (!known && !integrationId && def.a.from === a.from && def.a.to === a.to && def.b.from === b.from && def.b.to === b.to) store(companyId, agentId, def, result, signatureOf(facts), (facts.totals.second as any).sales);
   return result;
 }

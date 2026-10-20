@@ -12,6 +12,17 @@ import { tagIntegrationRows } from '../services/source-tagging.service.ts';
 
 const router = Router();
 
+/** A changed endpoint/account is a new data source; keep the old rows attached to the old connection id. */
+function sameConnectionSource(a: Record<string, any>, b: Record<string, any>) {
+  const identity = (c: Record<string, any>) => JSON.stringify([
+    String(c.server_url || '').trim().replace(/\/+$/, '').toLowerCase(),
+    String(c.company_account_id || '').trim(), String(c.branch_code || '').trim(), String(c.database_name || '').trim(),
+    String(c.auth_type || '').toUpperCase(), String(c.username || '').trim().toLowerCase(),
+    String(c.api_token || ''), String(c.password || '')
+  ]);
+  return identity(a) === identity(b);
+}
+
 router.get('/list', requireAuth, requirePermission('integration', 'view'), (req: Request, res: Response, next) => {
   try {
     const companyId = req.user!.companyId;
@@ -227,11 +238,30 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
     // "Connected" only after the provider actually answered.
     const adapter = integrationProvider.getAdapter(upperProvider);
     const check = await adapter.testConnection(configPayload).catch((e: any) => ({ ok: false, message: e.message }));
+    const sourceChanged = !!existing && !sameConnectionSource(existing.config || {}, configPayload);
+    if (sourceChanged && !check.ok) {
+      res.status(400).json({ success: false, error: `Yangi server ulanishi tasdiqlanmadi; amaldagi ulanish va uning ma’lumotlari saqlab qolindi: ${check.message}`, integration_id: existing!.id, connected: false });
+      return;
+    }
     // Saving the settings of a switched-off integration does not switch it back on.
     const status: Integration['status'] = existing?.disabled ? 'DISCONNECTED' : check.ok ? 'CONNECTED' : 'ERROR';
 
     let recordId: string;
-    if (existing) {
+    if (existing && sourceChanged) {
+      // Preserve the previous source id so reports for the new endpoint cannot mix its imported history.
+      tagIntegrationRows(existing.id);
+      SalesDocHistoryService.stop(existing.id);
+      db.update('integrations', existing.id, { disabled: true, status: 'DISCONNECTED' });
+      for (const other of db.find('integrations', i => i.company_id === companyId && i.id !== existing.id && i.config?.primary === true)) {
+        db.update('integrations', other.id, { config: { ...other.config, primary: false } });
+      }
+      configPayload.primary = true;
+      recordId = `int-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      db.insert('integrations', {
+        id: recordId, company_id: companyId, provider_type: existing.provider_type, provider_name: upperProvider,
+        status, disabled: !!existing.disabled, config: configPayload, last_sync_at: null, created_at: new Date().toISOString()
+      });
+    } else if (existing) {
       recordId = existing.id;
       db.update('integrations', existing.id, {
         config: configPayload,
@@ -266,7 +296,9 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
         server_url: configPayload.server_url,
         username: configPayload.username
       },
-      reason: `${upperProvider} uchun server kabineti ulanish sozlamalari yangilandi`
+      reason: sourceChanged
+        ? `${upperProvider} yangi server sifatida ulandi; oldingi server o‘chirildi va uning tarixi eski ulanishga biriktirildi`
+        : `${upperProvider} uchun server kabineti ulanish sozlamalari yangilandi`
     });
 
     if (!check.ok) {

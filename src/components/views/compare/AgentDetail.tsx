@@ -104,15 +104,15 @@ const CUSTOMER_TABS: [string, string][] = [['stopped', 'Xarid qilmay qo‘ygan']
  * embedded: shown inside a page (the agent's own cabinet) instead of a window; data and strategy then come from the
  * caller, and the strategy is read-only (it is kept up to date automatically).
  */
-export const AgentDetail: React.FC<{ agentId: string; a: Period; b: Period; onClose?: () => void; embedded?: boolean; data?: any; strategy?: any }> = ({ agentId, a, b, onClose = () => {}, embedded = false, data, strategy }) => {
+export const AgentDetail: React.FC<{ agentId: string; a: Period; b: Period; integrationId?: string | null; onClose?: () => void; embedded?: boolean; data?: any; strategy?: any }> = ({ agentId, a, b, integrationId, onClose = () => {}, embedded = false, data, strategy }) => {
   const [d, setD] = useState<any>(data || null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState('stopped');
   useEffect(() => {
     if (data) { setD(data); return; }
     setD(null); setError(null);
-    api.getCompareAgent(agentId, a, b).then(setD).catch(e => setError(e.message));
-  }, [agentId, a.from, a.to, b.from, b.to, data]);
+    api.getCompareAgent(agentId, a, b, integrationId).then(setD).catch(e => setError(e.message));
+  }, [agentId, a.from, a.to, b.from, b.to, integrationId, data]);
   useEffect(() => {
     if (embedded) return;
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -219,7 +219,7 @@ export const AgentDetail: React.FC<{ agentId: string; a: Period; b: Period; onCl
             </div>
 
             {/* AI growth plan from these numbers */}
-            <AgentStrategy agentId={agentId} a={d.periods.a} b={d.periods.b} initial={strategy} readOnly={embedded} />
+            <AgentStrategy agentId={agentId} a={d.periods.a} b={d.periods.b} integrationId={integrationId} initial={strategy} readOnly={embedded} />
 
             {/* 2. Side-by-side comparison */}
             <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white">

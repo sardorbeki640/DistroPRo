@@ -8,6 +8,8 @@ import { NotificationService } from '../services/notification.service.ts';
 import { compareAgent, comparePeriods } from '../services/compare.service.ts';
 import { TeamsService } from '../services/teams.service.ts';
 import { agentStrategy } from '../services/agent-strategy.service.ts';
+import { activeDistribution } from '../integrations/distribution.ts';
+import { db } from '../db/database.ts';
 import { z } from 'zod';
 
 const router = Router();
@@ -37,7 +39,14 @@ router.get('/pnl', requireAuth, requirePermission('reports', 'view'), (req: Requ
 router.get('/compare', requireAuth, requirePermission('reports', 'view'), (req: Request, res: Response, next) => {
   try {
     const q = (k: string) => String(req.query[k] || '');
-    res.json({ success: true, ...comparePeriods(req.user!.companyId, { from: q('a_from'), to: q('a_to') }, { from: q('b_from'), to: q('b_to') }) });
+    const companyId = req.user!.companyId;
+    const requested = req.query.integration_id === undefined ? undefined : String(req.query.integration_id);
+    const integrationId = requested === 'all' ? undefined : requested || activeDistribution(companyId)?.integration.id;
+    if (integrationId && !db.findOne('integrations', i => i.id === integrationId && i.company_id === companyId && !i.disabled)) {
+      res.status(404).json({ success: false, error: 'Tanlangan server topilmadi yoki o‘chirilgan.' });
+      return;
+    }
+    res.json({ success: true, integration_id: integrationId || null, ...comparePeriods(companyId, { from: q('a_from'), to: q('a_to') }, { from: q('b_from'), to: q('b_to') }, integrationId) });
   } catch (err) {
     next(err);
   }
@@ -62,8 +71,14 @@ router.put('/teams', requireAuth, requirePermission('settings', 'update'), (req:
 router.post('/compare/agent/:agentId/strategy', requireAuth, requirePermission('reports', 'view'), async (req: Request, res: Response, next) => {
   try {
     const p = z.object({ from: z.string(), to: z.string() });
-    const body = z.object({ a: p, b: p, force: z.boolean().optional() }).parse(req.body);
-    res.json({ success: true, ...(await agentStrategy(req.user!.companyId, req.params.agentId, body.a, body.b, body.force)) });
+    const body = z.object({ a: p, b: p, force: z.boolean().optional(), integration_id: z.string().nullable().optional() }).parse(req.body);
+    const companyId = req.user!.companyId;
+    const integrationId = body.integration_id === 'all' ? undefined : body.integration_id || activeDistribution(companyId)?.integration.id;
+    if (integrationId && !db.findOne('integrations', i => i.id === integrationId && i.company_id === companyId && !i.disabled)) {
+      res.status(404).json({ success: false, error: 'Tanlangan server topilmadi yoki o‘chirilgan.' });
+      return;
+    }
+    res.json({ success: true, ...(await agentStrategy(companyId, req.params.agentId, body.a, body.b, body.force, undefined, integrationId)) });
   } catch (err) { next(err); }
 });
 
@@ -71,7 +86,14 @@ router.post('/compare/agent/:agentId/strategy', requireAuth, requirePermission('
 router.get('/compare/agent/:agentId', requireAuth, requirePermission('reports', 'view'), (req: Request, res: Response, next) => {
   try {
     const q = (k: string) => String(req.query[k] || '');
-    res.json({ success: true, ...compareAgent(req.user!.companyId, req.params.agentId, { from: q('a_from'), to: q('a_to') }, { from: q('b_from'), to: q('b_to') }) });
+    const companyId = req.user!.companyId;
+    const requested = req.query.integration_id === undefined ? undefined : String(req.query.integration_id);
+    const integrationId = requested === 'all' ? undefined : requested || activeDistribution(companyId)?.integration.id;
+    if (integrationId && !db.findOne('integrations', i => i.id === integrationId && i.company_id === companyId && !i.disabled)) {
+      res.status(404).json({ success: false, error: 'Tanlangan server topilmadi yoki o‘chirilgan.' });
+      return;
+    }
+    res.json({ success: true, integration_id: integrationId || null, ...compareAgent(companyId, req.params.agentId, { from: q('a_from'), to: q('a_to') }, { from: q('b_from'), to: q('b_to') }, integrationId) });
   } catch (err) {
     next(err);
   }

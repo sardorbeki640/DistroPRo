@@ -9,18 +9,18 @@ type Period = { from: string; to: string };
  * Opens by itself: the strategy kept up to date by the server (this month against last month) or, for other periods,
  * written when the window opens. initial + readOnly: the agent's own cabinet, which only shows the current strategy.
  */
-export const AgentStrategy: React.FC<{ agentId: string; a: Period; b: Period; initial?: any; readOnly?: boolean }> = ({ agentId, a, b, initial, readOnly = false }) => {
+export const AgentStrategy: React.FC<{ agentId: string; a: Period; b: Period; integrationId?: string | null; initial?: any; readOnly?: boolean }> = ({ agentId, a, b, integrationId, initial, readOnly = false }) => {
   const [res, setRes] = useState<any>(initial || null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const run = async (force = false) => {
     setBusy(true); setError(null);
-    try { setRes(await api.getAgentStrategy(agentId, a, b, force)); } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+    try { setRes(await api.getAgentStrategy(agentId, a, b, force, integrationId)); } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
   useEffect(() => {
     if (initial) { setRes(initial); return; }
     if (!readOnly) run(false);
-  }, [agentId, a.from, a.to, b.from, b.to, initial]);
+  }, [agentId, a.from, a.to, b.from, b.to, integrationId, initial]);
   const s = res?.strategy;
   const card = 'rounded-lg border border-neutral-200 bg-white p-3';
   return (
