@@ -728,10 +728,22 @@ export class SalesDocAdapter implements IntegrationAdapter {
     const employeesList: ExternalSyncEmployee[] = [];
     const seenIds = new Set<string>();
 
+    // SalesDoc V2 deployments wrap reference lists at different response depths.
+    const responseRows = (response: any, key: string): any[] => {
+      if (Array.isArray(response)) return response;
+      for (const rows of [
+        response?.[key], response?.result?.[key], response?.data?.[key], response?.data?.result?.[key],
+        response?.results, response?.result?.results, response?.data?.results, response?.data?.result?.results
+      ]) {
+        if (Array.isArray(rows)) return rows;
+      }
+      return [];
+    };
+
     try {
       // 1. getAgent (Sales Agents / Savdo vakillari)
       const agentRes = await this.executeSalesDocMethod(config, 'getAgent', { limit: 1000 }).catch(() => null);
-      const rawAgents = agentRes?.agent || (Array.isArray(agentRes) ? agentRes : []);
+      const rawAgents = responseRows(agentRes, 'agent');
       for (const a of rawAgents) {
         const extId = a.SD_id || a.CS_id || a.code_1C || `SD-AG-${Math.random().toString(36).slice(2, 6)}`;
         if (!seenIds.has(extId)) {
@@ -750,7 +762,7 @@ export class SalesDocAdapter implements IntegrationAdapter {
 
       // 2. getExpeditor (Delivery Expeditors / Ekspeditorlar)
       const expRes = await this.executeSalesDocMethod(config, 'getExpeditor', { limit: 1000 }).catch(() => null);
-      const rawExpeditors = expRes?.expeditor || (Array.isArray(expRes) ? expRes : []);
+      const rawExpeditors = responseRows(expRes, 'expeditor');
       for (const e of rawExpeditors) {
         const extId = e.SD_id || e.CS_id || e.code_1C || `SD-EXP-${Math.random().toString(36).slice(2, 6)}`;
         if (!seenIds.has(extId)) {
@@ -769,7 +781,7 @@ export class SalesDocAdapter implements IntegrationAdapter {
 
       // 3. getSupervisor (Supervisors / Supervayzerlar)
       const supRes = await this.executeSalesDocMethod(config, 'getSupervisor', {}).catch(() => null);
-      const rawSupervisors = supRes?.supervisor || (Array.isArray(supRes) ? supRes : []);
+      const rawSupervisors = responseRows(supRes, 'supervisor');
       for (const s of rawSupervisors) {
         const extId = s.SD_id || s.CS_id || s.code_1C || `SD-SUP-${Math.random().toString(36).slice(2, 6)}`;
         if (!seenIds.has(extId)) {
