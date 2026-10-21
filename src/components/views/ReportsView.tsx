@@ -54,12 +54,20 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ user, onNavigate, onRe
   const [reportServer, setReportServer] = useState<string | null>(null);
   const [serverOptions, setServerOptions] = useState<any[]>([]);
   const reportRequestSequence = useRef(0);
-  useEffect(() => { api.getIntegrations().then(r => setServerOptions((r.integrations || []).filter((i: any) => !i.disabled))).catch(() => {}); }, []);
+  useEffect(() => {
+    let alive = true;
+    const loadServers = () => api.getIntegrations()
+      .then(r => { if (alive) setServerOptions((r.integrations || []).filter((i: any) => !i.disabled)); })
+      .catch(() => {});
+    loadServers();
+    window.addEventListener('distribution:refresh', loadServers);
+    return () => { alive = false; window.removeEventListener('distribution:refresh', loadServers); };
+  }, []);
   // The connected distribution system (SalesDoctor, Linko, …): the "SFA" tab and sync follow it.
   const distribution = useDistribution();
   const dName = distribution.name;
   useEffect(() => {
-    if (distribution.loaded) setReportServer(distribution.system?.id || '');
+    if (distribution.loaded) setReportServer(distribution.system?.id || null);
   }, [distribution.loaded, distribution.system?.id]);
 
   // Date filters

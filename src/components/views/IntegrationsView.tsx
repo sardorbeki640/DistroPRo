@@ -344,6 +344,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
         showReportsLink: true
       });
       setShowConfigModal(false);
+      refreshDistribution();
       await fetchIntegrations();
       if (onRefresh) onRefresh();
     } catch (err: any) {

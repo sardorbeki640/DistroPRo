@@ -76,19 +76,29 @@ export const CompareReport: React.FC = () => {
 
   useEffect(() => {
     let alive = true;
-    Promise.all([api.getIntegrations().catch(() => ({ integrations: [] })), api.getActiveDistribution()]).then(([list, distribution]) => {
-      if (!alive) return;
-      const options = (list.integrations || []).filter((i: any) => !i.disabled);
-      if (distribution.active && !options.some((i: any) => i.id === distribution.active!.id)) {
-        options.push({ ...distribution.active, provider_name: distribution.active.provider, system_name: distribution.active.name, config: {} });
-      }
-      setServerOptions(options);
-      setIntegrationId(distribution.active?.id || 'all');
-    }).catch((e: any) => {
-      if (!alive) return;
-      setError(e.message || 'Joriy serverni aniqlab bo‘lmadi. Server filtri aniqlanmaguncha ma’lumot yuklanmaydi.');
-    });
-    return () => { alive = false; };
+    let sourceRequest = 0;
+    const loadServer = () => {
+      const current = ++sourceRequest;
+      setData(null);
+      setError(null);
+      setIntegrationId(null);
+      Promise.all([api.getIntegrations().catch(() => ({ integrations: [] })), api.getActiveDistribution()]).then(([list, distribution]) => {
+        if (!alive || current !== sourceRequest) return;
+        const options = (list.integrations || []).filter((i: any) => !i.disabled);
+        if (distribution.active && !options.some((i: any) => i.id === distribution.active!.id)) {
+          options.push({ ...distribution.active, provider_name: distribution.active.provider, system_name: distribution.active.name, config: {} });
+        }
+        setServerOptions(options);
+        if (distribution.active?.id) setIntegrationId(distribution.active.id);
+        else setError('Faol server aniqlanmadi. Eski serverlar aralashib ketmasligi uchun “Barcha serverlar” ma’lumotlari avtomatik yuklanmadi.');
+      }).catch((e: any) => {
+        if (!alive || current !== sourceRequest) return;
+        setError(e.message || 'Joriy serverni aniqlab bo‘lmadi. Server filtri aniqlanmaguncha ma’lumot yuklanmaydi.');
+      });
+    };
+    loadServer();
+    window.addEventListener('distribution:refresh', loadServer);
+    return () => { alive = false; sourceRequest++; window.removeEventListener('distribution:refresh', loadServer); };
   }, []);
 
   const load = async (pa = a, pb = b, server = integrationId) => {
