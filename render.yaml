@@ -21,7 +21,7 @@ services:
       - key: FINANCE_DATA_DIR
         value: /var/data
       - key: JWT_SECRET
-        generateValue: true
+        sync: false
       - key: OWNER_EMAIL
         sync: false
       - key: OWNER_PASSWORD
