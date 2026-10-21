@@ -3,6 +3,7 @@ import { db } from '../db/database.ts';
 import type { AttendanceSettings, NotificationChannel, StaffReminderType, StaffTelegram } from '../db/schema.ts';
 import { AuditService } from './audit.service.ts';
 import { AttendanceService } from './attendance.service.ts';
+import { SalaryService } from './salary.service.ts';
 import { TelegramService, escapeHtml } from './telegram.service.ts';
 import { businessToday } from '../utils/date.ts';
 
@@ -184,9 +185,20 @@ export class StaffBotService {
             if (db.findById('notifications', id)) return;
             const rule = (s.rules || []).find(r => r.type === o.type);
             const what = `${escapeHtml(rule?.label || o.type)}${o.minutes ? ` (${o.minutes} daqiqa)` : ''}${o.note ? ` — ${escapeHtml(o.note)}` : ''}`;
+            let earned = 0;
+            try {
+              const payroll = SalaryService.calculateMonthlySalary({ company_id, employee_id: t.employee_id, period_month: month, user_id: 'telegram-bot', user_email: 'telegram-bot' });
+              earned = payroll.base_amount + payroll.bonus_amount + payroll.piecework_amount;
+            } catch (err: any) { console.warn('[StaffBot] jarima summasi:', err.message); }
+            const dayPercent = Math.round(list.filter(x => x.date === o.date).reduce((sum, x) => sum + x.percent, 0) * 100) / 100;
+            const dayAmount = earned > 0 ? Math.round(earned * dayPercent / 100) : null;
+            const monthAmount = earned > 0 ? Math.round(earned * total / 100) : null;
+            const amountText = dayAmount === null
+              ? 'Jarima summasi: maosh tarkibi kiritilmagan, so‘mda hisoblab bo‘lmadi.'
+              : `Bugungi jami jarima: <b>${money(dayAmount)} so‘m</b> (${dayPercent}%). Oy boshidan jami: <b>${money(monthAmount!)} so‘m</b> (${total}%).`;
             db.insert('notifications', {
               id, company_id, channel_id: bot.id, channel_type: 'TELEGRAM', title: `⚠️ ${name}: jarima`,
-              content: `${o.date.split('-').reverse().join('.')} — ${what}\nJarima: <b>${o.percent}%</b>. Shu oy jami: <b>${total}%</b> (${i + 1} ta qoidabuzarlik).`,
+              content: `${o.date.split('-').reverse().join('.')} — ${what}\nShu holat: <b>${o.percent}%</b>. ${amountText} (${i + 1} ta qoidabuzarlik hisoblangan).`,
               status: 'PENDING', attempt_count: 0, recipient: chat, personal_chat_id: chat, created_at: new Date().toISOString(), sent_at: null
             } as any);
           });
@@ -204,6 +216,22 @@ export class StaffBotService {
     db.insert('notifications', {
       id: `ppx-${v.id}`, company_id, channel_id: bot.id, channel_type: 'TELEGRAM', title: `✅ ${name}: jarima bekor qilindi`,
       content: `${v.date.split('-').reverse().join('.')} — ushlanma olib tashlandi.\nSabab: ${escapeHtml(reason)}`,
+      status: 'PENDING', attempt_count: 0, recipient: posted.personal_chat_id, personal_chat_id: posted.personal_chat_id, created_at: new Date().toISOString(), sent_at: null
+    } as any);
+  }
+
+  /** Tells the same group that a missed-day penalty was excused by an admin. */
+  static postAbsenceExcused(company_id: string, employee_id: string, date: string, reason: string) {
+    const posted = db.findById('notifications', `pp-${company_id}-${employee_id}-${date}-ABSENT-auto`);
+    if (!posted) return;
+    const bot = this.personalBot(company_id);
+    if (!bot) return;
+    const name = db.findById('employees', employee_id)?.full_name || 'Xodim';
+    const id = `ppx-absence-${company_id}-${employee_id}-${date}`;
+    if (db.findById('notifications', id)) return;
+    db.insert('notifications', {
+      id, company_id, channel_id: bot.id, channel_type: 'TELEGRAM', title: `✅ ${name}: kun uzrli deb belgilandi`,
+      content: `${date.split('-').reverse().join('.')} — sababsiz ish qoldirish jarimasi bekor qilindi.\nSabab: ${escapeHtml(reason)}`,
       status: 'PENDING', attempt_count: 0, recipient: posted.personal_chat_id, personal_chat_id: posted.personal_chat_id, created_at: new Date().toISOString(), sent_at: null
     } as any);
   }
@@ -246,8 +274,14 @@ export class StaffBotService {
         recent.unshift({ id: String(chat.id), title, type: chat.type });
       }
       // A round video in the couriers' group: the start of work of whoever posted it.
-      if (u.message?.video_note && bot.config.checkin_chat_id && String(chat?.id) === String(bot.config.checkin_chat_id)) {
-        try { await this.handleVideo(bot, u.message); } catch (err: any) { console.warn('[StaffBot] video:', err.message); }
+      if (u.message?.video_note) {
+        const settings = AttendanceService.settings(bot.company_id);
+        const match = Object.entries(settings.checkin_groups || {}).find(([, id]) => String(id) === String(chat?.id));
+        const hasGroupRoutes = Object.keys(settings.checkin_groups || {}).length > 0;
+        const legacyMatch = !hasGroupRoutes && bot.config.checkin_chat_id && String(chat?.id) === String(bot.config.checkin_chat_id);
+        if (match || legacyMatch) {
+          try { await this.handleVideo(bot, u.message, match?.[0]); } catch (err: any) { console.warn('[StaffBot] video:', err.message); }
+        }
         continue;
       }
       const text = String(u.message?.text || '').trim();
@@ -269,7 +303,7 @@ export class StaffBotService {
    * A video note posted in the check-in group. The time is Telegram's (when it received the message), not the phone's.
    * Forwarded or very short videos do not count. The poster is found by their linked private chat (user id = chat id).
    */
-  private static async handleVideo(bot: NotificationChannel, m: any) {
+  private static async handleVideo(bot: NotificationChannel, m: any, expectedGroupId?: string) {
     const company_id = bot.company_id;
     const reply = (text: string) => TelegramService.call(bot.config.bot_token!, 'sendMessage', {
       chat_id: m.chat.id, text, parse_mode: 'HTML', reply_parameters: { message_id: m.message_id, allow_sending_without_reply: true },
@@ -282,10 +316,10 @@ export class StaffBotService {
     const employee_id = this.employeeOfTelegram(company_id, fromId);
     if (!employee_id) {
       // Not assigned yet: remembered for the admin to assign (the video then counts); nothing is said in the group.
-      this.rememberSender(bot, m.from, { at: new Date(Number(m.date) * 1000).toISOString(), ...tg });
+      this.rememberSender(bot, m.from, { at: new Date(Number(m.date) * 1000).toISOString(), ...tg, work_group_id: expectedGroupId || null });
       return;
     }
-    const r: any = AttendanceService.recordVideo(company_id, employee_id, new Date(Number(m.date) * 1000), tg);
+    const r: any = AttendanceService.recordVideo(company_id, employee_id, new Date(Number(m.date) * 1000), tg, expectedGroupId);
     if (!r.already) await reply(escapeHtml(r.message));
   }
 
@@ -298,7 +332,7 @@ export class StaffBotService {
   }
 
   /** People who posted round videos in the group but are not assigned to an employee yet (kept with their last videos). */
-  private static rememberSender(bot: NotificationChannel, from: any, video: { at: string; chat_id: string; message_id: number; file_id?: string; duration: number }) {
+  private static rememberSender(bot: NotificationChannel, from: any, video: { at: string; chat_id: string; message_id: number; file_id?: string; duration: number; work_group_id?: string | null }) {
     const fresh = db.findById('notification_channels', bot.id) || bot;
     const list: any[] = Array.isArray(fresh.config.video_senders) ? [...fresh.config.video_senders] : [];
     const id = String(from?.id || '');
@@ -316,6 +350,7 @@ export class StaffBotService {
   /** Unassigned video senders and every employee's Telegram account, for the admin. */
   static telegramAccounts(company_id: string) {
     const bot = this.personalBot(company_id);
+    const attendance = AttendanceService.settings(company_id);
     const assigned = new Set(db.find('employees', e => e.company_id === company_id && !!e.telegram_user_id).map(e => String(e.telegram_user_id)));
     const linked = new Set(db.find('staff_telegram', r => r.company_id === company_id && !!r.chat_id && !!r.employee_id).map(r => r.chat_id!));
     const senders = (Array.isArray(bot?.config?.video_senders) ? bot!.config.video_senders : [])
@@ -325,7 +360,7 @@ export class StaffBotService {
       const link = db.findById('staff_telegram', `${company_id}:emp:${e.id}`);
       return { id: e.id, name: e.full_name, position: e.position, telegram_user_id: e.telegram_user_id || null, telegram_name: e.telegram_name || null, bot_linked: !!link?.chat_id && !link.blocked_at };
     }).sort((a, b) => a.name.localeCompare(b.name));
-    return { bot_username: bot?.config?.bot_username || null, checkin_group: !!bot?.config?.checkin_chat_id, senders, employees };
+    return { bot_username: bot?.config?.bot_username || null, checkin_group: Object.keys(attendance.checkin_groups || {}).length > 0 || !!bot?.config?.checkin_chat_id, senders, employees };
   }
 
   /**
@@ -348,7 +383,7 @@ export class StaffBotService {
     let counted = 0;
     if (id && sender?.videos?.length) {
       for (const v of [...sender.videos].sort((a: any, b: any) => a.at.localeCompare(b.at))) {
-        const r: any = AttendanceService.recordVideo(company_id, employee_id, new Date(v.at), { chat_id: v.chat_id, message_id: v.message_id, file_id: v.file_id, duration: v.duration });
+        const r: any = AttendanceService.recordVideo(company_id, employee_id, new Date(v.at), { chat_id: v.chat_id, message_id: v.message_id, file_id: v.file_id, duration: v.duration }, v.work_group_id || undefined);
         if (r.ok) counted++;
       }
       const fresh = db.findById('notification_channels', bot!.id)!;

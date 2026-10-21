@@ -938,10 +938,14 @@ export interface AttendanceSettings {
   company_id: string;
   default_schedule: WorkSchedule;
   schedules: Record<string, WorkSchedule>; // per employee_id
+  /** Admin-set start-time exception for a specific employee, applied over their group's schedule. */
+  employee_start_times?: Record<string, string>;
   // RULES: percent of the month's earned salary by the discipline rules below (company rule book).
   penalty: { mode: 'NONE' | 'FIXED' | 'PER_MINUTE' | 'RULES'; amount: number; early_leave: boolean; monthly_cap: number };
   rules?: DisciplineRule[];
   groups?: WorkGroup[];
+  /** Telegram group ID that records round-video attendance for each work group. */
+  checkin_groups?: Record<string, string>;
   employee_groups?: Record<string, string>;   // employee_id -> group id
   agent_links?: Record<string, string>;       // employee_id -> agents.id (SalesDoc agent) for SALESDOC_VISIT groups
   employee_methods?: Record<string, StartSource>; // per employee: how they mark the start (overrides the group's way)

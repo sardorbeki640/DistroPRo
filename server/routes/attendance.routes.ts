@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-import { requireAuth, requirePermission, requireSuperAdmin } from '../middleware/auth.middleware.ts';
+import { requireAuth, requirePermission, requireSuperAdmin, requireOwner } from '../middleware/auth.middleware.ts';
 import { AttendanceService } from '../services/attendance.service.ts';
 import { SheetsService } from '../services/sheets.service.ts';
 import { StaffBotService } from '../services/staff-bot.service.ts';
@@ -39,7 +39,7 @@ router.post('/check', requireAuth, (req, res, next) => {
 router.get('/settings', requireAuth, requirePermission('employee', 'view'), (req, res, next) => {
   try { res.json({ success: true, settings: AttendanceService.settings(req.user!.companyId) }); } catch (e) { next(e); }
 });
-router.put('/settings', requireAuth, requirePermission('employee', 'update'), (req, res, next) => {
+router.put('/settings', requireAuth, requirePermission('employee', 'update'), requireOwner, (req, res, next) => {
   try {
     const body = { ...(req.body || {}) };
     // Work places, their radius and the "only at the work place" rule are the super admin's; others keep them as they are.
@@ -87,7 +87,7 @@ router.post('/sheets/test', requireAuth, requirePermission('employee', 'update')
 router.get('/telegram-accounts', requireAuth, requirePermission('employee', 'update'), (req, res, next) => {
   try { res.json({ success: true, ...StaffBotService.telegramAccounts(req.user!.companyId) }); } catch (e) { next(e); }
 });
-router.put('/telegram-accounts', requireAuth, requirePermission('employee', 'update'), (req, res, next) => {
+router.put('/telegram-accounts', requireAuth, requirePermission('employee', 'update'), requireOwner, (req, res, next) => {
   try {
     const body = z.object({ employee_id: z.string().max(80), telegram_user_id: z.string().max(30).nullable() }).parse(req.body);
     res.json({ success: true, ...StaffBotService.assignTelegram(req.user!.companyId, body.employee_id, body.telegram_user_id, who(req)), ...StaffBotService.telegramAccounts(req.user!.companyId) });
@@ -97,7 +97,7 @@ router.put('/telegram-accounts', requireAuth, requirePermission('employee', 'upd
 router.get('/penalty-posts', requireAuth, requirePermission('employee', 'update'), (req, res, next) => {
   try { res.json({ success: true, ...AttendanceService.penaltyPostsView(req.user!.companyId) }); } catch (e) { next(e); }
 });
-router.put('/penalty-posts', requireAuth, requirePermission('employee', 'update'), (req, res, next) => {
+router.put('/penalty-posts', requireAuth, requirePermission('employee', 'update'), requireOwner, (req, res, next) => {
   try {
     const map = z.record(z.string(), z.string().max(30));
     const body = z.object({ enabled: z.boolean(), groups: map.default({}), employees: map.default({}) }).parse(req.body);
@@ -131,7 +131,7 @@ router.post('/events/:id/review', requireAuth, requirePermission('employee', 'up
     res.json({ success: true, event: AttendanceService.review(req.user!.companyId, req.params.id, body.decision, body.reason, who(req)) });
   } catch (e) { next(e); }
 });
-router.post('/excuse', requireAuth, requirePermission('employee', 'update'), (req, res, next) => {
+router.post('/excuse', requireAuth, requirePermission('employee', 'update'), requireOwner, (req, res, next) => {
   try {
     const body = z.object({ employee_id: z.string(), date, excused: z.boolean(), reason: z.string().max(300) }).parse(req.body);
     AttendanceService.excuse(req.user!.companyId, body.employee_id, body.date, body.excused, body.reason, who(req));
@@ -145,13 +145,13 @@ router.get('/violations', requireAuth, requirePermission('employee', 'view'), (r
     res.json({ success: true, month, violations: AttendanceService.violations(req.user!.companyId, month) });
   } catch (e) { next(e); }
 });
-router.post('/violations', requireAuth, requirePermission('employee', 'update'), (req, res, next) => {
+router.post('/violations', requireAuth, requirePermission('employee', 'update'), requireOwner, (req, res, next) => {
   try {
     const body = z.object({ employee_id: z.string(), date, type: z.enum(['LATE', 'ABSENT', 'NASIYA_MISUSE', 'TASK_LATE', 'OTHER']), note: z.string().max(300) }).parse(req.body);
     res.status(201).json({ success: true, violation: AttendanceService.addViolation(req.user!.companyId, body, who(req)) });
   } catch (e) { next(e); }
 });
-router.post('/violations/:id/cancel', requireAuth, requirePermission('employee', 'update'), (req, res, next) => {
+router.post('/violations/:id/cancel', requireAuth, requirePermission('employee', 'update'), requireOwner, (req, res, next) => {
   try { AttendanceService.cancelViolation(req.user!.companyId, req.params.id, String(req.body?.reason || ''), who(req)); res.json({ success: true }); } catch (e) { next(e); }
 });
 /** Pulls agents' first visits from SalesDoc for a period now (the scheduler does today every 10 minutes). */

@@ -90,10 +90,11 @@ export class AttendanceService {
   /** The employee's day plan: their group's start window (late after its end) or the default schedule. */
   static planOf(s: AttendanceSettings, employee_id: string): Plan {
     const group = (s.groups || []).find(g => g.id === s.employee_groups?.[employee_id]) || null;
+    const startOverride = s.employee_start_times?.[employee_id];
     // The admin may set one employee's way of marking the start apart from their group (e.g. one courier by video).
     const method = s.employee_methods?.[employee_id];
-    if (group) return { start: group.start_to, end: group.end, grace_minutes: 0, workdays: group.workdays, source: method || group.source, group };
-    return { ...this.scheduleOf(s, employee_id), source: method || 'FACE_ID', group: null };
+    if (group) return { start: startOverride || group.start_to, end: group.end, grace_minutes: 0, workdays: group.workdays, source: method || group.source, group };
+    return { ...this.scheduleOf(s, employee_id), ...(startOverride ? { start: startOverride } : {}), source: method || 'FACE_ID', group: null };
   }
 
   static saveSettings(company_id: string, input: Partial<AttendanceSettings>, actor: { id: string; email: string }) {
@@ -135,9 +136,33 @@ export class AttendanceService {
         return { id: g.id || `grp-${Date.now()}-${i}`, name: g.name.trim(), start_from: g.start_from, start_to: g.start_to, end: g.end, workdays, source: g.source };
       });
     }
+    if (input.checkin_groups) {
+      const validGroupIds = new Set((input.groups || current.groups || []).map(g => g.id).filter(Boolean));
+      const mappings: Record<string, string> = {};
+      const assignedChats = new Set<string>();
+      for (const [groupId, rawChatId] of Object.entries(input.checkin_groups)) {
+        const chatId = String(rawChatId || '').trim();
+        if (!validGroupIds.has(groupId)) throw new Error('Telegram guruhi mavjud ish guruhiga biriktirilishi kerak. Avval ish guruhini saqlang.');
+        if (!chatId) continue;
+        if (!/^-(?:100)?\d{5,}$/.test(chatId)) throw new Error(`${groupId}: Telegram guruh IDsi -100… shaklida bo‘lishi kerak.`);
+        if (assignedChats.has(chatId)) throw new Error('Bir Telegram guruhni bir nechta ish guruhiga biriktirib bo‘lmaydi. Har biriga alohida ID kiriting.');
+        assignedChats.add(chatId);
+        mappings[groupId] = chatId;
+      }
+      next.checkin_groups = mappings;
+    }
     if (input.employee_groups) next.employee_groups = Object.fromEntries(Object.entries(input.employee_groups).filter(([, g]) => !!g));
     if (input.agent_links) next.agent_links = Object.fromEntries(Object.entries(input.agent_links).filter(([, a]) => !!a));
     if (input.employee_methods) next.employee_methods = Object.fromEntries(Object.entries(input.employee_methods).filter(([, m]) => START_SOURCES.includes(m as StartSource))) as Record<string, StartSource>;
+    if (input.employee_start_times) {
+      const starts: Record<string, string> = {};
+      for (const [employeeId, start] of Object.entries(input.employee_start_times)) {
+        if (db.findById('employees', employeeId)?.company_id !== company_id) throw new Error('Ish vaqti faqat shu kompaniya xodimiga o‘zgartiriladi.');
+        if (start && !/^([01]\d|2[0-3]):[0-5]\d$/.test(start)) throw new Error(`${employeeId}: ish boshlash vaqti noto‘g‘ri.`);
+        if (start) starts[employeeId] = start;
+      }
+      next.employee_start_times = starts;
+    }
     if (input.zones) {
       next.zones = input.zones.map((z, i) => {
         if (!z.name?.trim() || !Number.isFinite(z.lat) || !Number.isFinite(z.lng) || Math.abs(z.lat) > 90 || Math.abs(z.lng) > 180) throw new Error(`${i + 1}-hudud: nom va to‘g‘ri koordinata kiriting.`);
@@ -539,13 +564,16 @@ export class AttendanceService {
    * A round video (Telegram video note) posted to the couriers' group: the moment Telegram received it is the start of
    * work. Only for employees whose way is "round video"; the day's first one counts, later ones are not recorded.
    */
-  static recordVideo(company_id: string, employee_id: string, at: Date, tg: { chat_id: string; message_id: number; file_id?: string; duration?: number }) {
+  static recordVideo(company_id: string, employee_id: string, at: Date, tg: { chat_id: string; message_id: number; file_id?: string; duration?: number }, expectedGroupId?: string) {
     const employee = db.findById('employees', employee_id);
     if (!employee || employee.company_id !== company_id || employee.status === 'INACTIVE') return { ok: false, message: 'Xodim kartasi topilmadi yoki nofaol.' };
     const s = this.settings(company_id);
     const plan = this.planOf(s, employee_id);
     if (plan.source !== 'TELEGRAM_VIDEO') {
       return { ok: false, message: `${employee.full_name}: sizga ish boshlash ${START_SOURCE_LABEL[plan.source]} orqali belgilanadi, video hisobga olinmaydi.` };
+    }
+    if (expectedGroupId && plan.group?.id !== expectedGroupId) {
+      return { ok: false, message: `${employee.full_name}: bu video siz biriktirilgan ish guruhining Telegram guruhidan yuborilmadi.` };
     }
     const date = businessToday(at);
     const before = this.dayFor(s, employee_id, date);
@@ -796,6 +824,7 @@ export class AttendanceService {
       for (const e of events) db.update('attendance_events', e.id, { excused });
     }
     AuditService.log({ company_id, user_id: actor.id, user_email: actor.email, action: 'UPDATE', entity: 'Attendance', entity_id: `${employee_id}:${date}`, old_value: null, new_value: { excused }, reason: `${employee.full_name}, ${date}: ${excused ? 'uzrli deb belgilandi' : 'uzr bekor qilindi'} — ${reason.trim()}` });
+    if (excused) StaffBotService.postAbsenceExcused(company_id, employee_id, date, reason.trim());
   }
 
   static photoPath(company_id: string, id: string): string {
@@ -821,7 +850,7 @@ export class AttendanceService {
       zone_required: !!s.require_zone && s.zones.length > 0,
       employee_name: employee.full_name,
       // What the employee is told: "start by 09:30" for a window, the start time otherwise.
-      schedule: { start: plan.group ? `${plan.group.start_from}–${plan.group.start_to}` : plan.start, end: plan.end, source: plan.source, group: plan.group?.name || null },
+      schedule: { start: plan.group ? `${plan.group.start_from}–${plan.start}` : plan.start, end: plan.end, source: plan.source, group: plan.group?.name || null },
       today: this.dayFor(s, employee.id, today),
       events: this.events(company_id, { from: today, to: today, employee_id: employee.id }),
       // The employee sees their own violations of the month and what they cost (transparency, fewer disputes).
