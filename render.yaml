@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: distro-pro
+    name: distropro
     runtime: node
     plan: starter
     repo: https://github.com/sardorbeki640/DistroPRo.git
