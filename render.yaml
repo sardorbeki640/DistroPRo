@@ -16,6 +16,12 @@ services:
         value: production
       - key: FINANCE_DATA_DIR
         value: .data
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: OWNER_SETUP_TOKEN
+        sync: false
       - key: JWT_SECRET
         sync: false
       - key: OWNER_EMAIL

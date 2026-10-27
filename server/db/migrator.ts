@@ -17,6 +17,7 @@ export class MigrationRunner {
 
   public async run(): Promise<{ executed: string[]; alreadyApplied: string[] }> {
     db.init();
+    await db.connectTurso();
     const appliedRecords = db.getTable('_migrations');
     const appliedIds = new Set(appliedRecords.map((m: MigrationRecord) => m.id));
 
@@ -41,6 +42,8 @@ export class MigrationRunner {
       executed.push(migration.id);
       console.log(`[Migration] Completed: ${migration.id}`);
     }
+
+    await db.flushTurso();
 
     return { executed, alreadyApplied };
   }

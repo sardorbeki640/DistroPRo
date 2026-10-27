@@ -15,7 +15,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [setupRequired, setSetupRequired] = useState(false);
-  useEffect(() => {if(isOpen) fetch('/api/auth/setup').then(r=>r.json()).then(r=>setSetupRequired(r.required)).catch(()=>setError('Serverga ulanib bo‘lmadi'));},[isOpen]);
+  const [setupMode, setSetupMode] = useState<'local' | 'token' | 'environment'>('local');
+  const [setupToken, setSetupToken] = useState('');
+  useEffect(() => {if(isOpen) fetch('/api/auth/setup').then(r=>r.json()).then(r=>{setSetupRequired(r.required);setSetupMode(r.mode || 'local');}).catch(()=>setError('Serverga ulanib bo‘lmadi'));},[isOpen]);
 
   if (!isOpen) return null;
 
@@ -26,7 +28,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => 
 
     try {
       if (setupRequired) {
-        const response = await fetch('/api/auth/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});
+        const response = await fetch('/api/auth/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,setup_token:setupToken})});
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || body.message || 'Hisob yaratilmadi');
         setSetupRequired(false);
@@ -57,6 +59,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => 
 
         <div className="p-6">
           {setupRequired && <p className="mb-4 text-sm text-amber-800">Birinchi sozlash: o‘zingizning emailingiz va kamida 12 belgili yangi parolni kiriting. Sinov hisoblari o‘chiriladi. Biznes yozuvlari saqlanadi.</p>}
+          {setupRequired && setupMode === 'environment' && <div className="mb-4 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">Serverda egasi hisobini yaratish bloklangan. Render Environment bo‘limida OWNER_EMAIL va OWNER_PASSWORD ni sozlang yoki OWNER_SETUP_TOKEN qo‘shib, serverni qayta ishga tushiring.</div>}
           <div className="mb-5 flex items-center gap-2 rounded-lg bg-emerald-50 p-3 text-xs text-emerald-800">
             <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600" />
             <span>Tizim RBAC va audit xavfsizlik protokollari bilan himoyalangan.</span>
@@ -70,6 +73,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => 
           )}
 
           <form onSubmit={handleLogin} className="space-y-4">
+            {setupRequired && setupMode === 'token' && <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-700">Bir martalik sozlash kaliti</label>
+              <input type="password" autoComplete="off" value={setupToken} onChange={e=>setSetupToken(e.target.value)} required className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-xs focus:border-emerald-600 focus:outline-none" />
+            </div>}
             <div>
               <label className="mb-1 block text-xs font-medium text-neutral-700">{setupRequired ? 'Elektron pochta' : 'Email yoki login'}</label>
               <div className="relative">
@@ -112,7 +119,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => 
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (setupRequired && setupMode === 'environment')}
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
             >
               <span>{loading ? 'Tekshirilmoqda...' : setupRequired ? 'Egasi hisobini yaratish' : 'Tizimga kirish'}</span>

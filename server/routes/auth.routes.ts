@@ -5,13 +5,28 @@ import { requireAuth, requirePermission } from '../middleware/auth.middleware.ts
 import { LoginSchema, AssignRoleSchema, ChangePasswordSchema } from '../validation/schemas.ts';
 import { db } from '../db/database.ts';
 import { SetupService } from '../services/setup.service.ts';
+import { timingSafeEqual } from 'node:crypto';
 
 const router = Router();
-router.get('/setup', (_req,res) => res.json({required:SetupService.required()}));
+function hasValidSetupToken(candidate: unknown): boolean {
+  const expected = process.env.OWNER_SETUP_TOKEN || '';
+  if (expected.length < 32 || typeof candidate !== 'string') return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(candidate);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+router.get('/setup', (_req,res) => res.json({
+  required: SetupService.required(),
+  mode: process.env.NODE_ENV !== 'production' ? 'local' : ((process.env.OWNER_SETUP_TOKEN || '').length >= 32 ? 'token' : 'environment')
+}));
 router.post('/setup', (req,res,next) => {
   const address = req.socket.remoteAddress;
-  if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(address || '') || req.headers.origin !== `http://${req.headers.host}`) {
-    res.status(403).json({error:'Dastlabki sozlashni shu kompyuter brauzerida bajaring'}); return;
+  const localRequest = ['127.0.0.1','::1','::ffff:127.0.0.1'].includes(address || '') && req.headers.origin === `http://${req.headers.host}`;
+  const sameOrigin = typeof req.headers.origin === 'string' && req.headers.origin === `${req.protocol}://${req.headers.host}`;
+  const remoteRequest = process.env.NODE_ENV === 'production' && sameOrigin && hasValidSetupToken(req.body?.setup_token);
+  if (!localRequest && !remoteRequest) {
+    res.status(403).json({error:'Serverda ilk sozlash uchun Render’da OWNER_EMAIL va OWNER_PASSWORD kiriting yoki OWNER_SETUP_TOKEN (kamida 32 belgi) sozlang.'}); return;
   }
   try {
     SetupService.createOwner(String(req.body.email || '').trim(),String(req.body.password || ''));

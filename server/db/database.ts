@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createClient, type Client } from '@libsql/client';
 import type { DatabaseSchema } from './schema.ts';
 import { decryptSecret, encryptSecret } from '../jarvis/secrets.ts';
 
@@ -83,6 +84,7 @@ const SECRET_TABLES = new Set(['integrations', 'notification_channels']);
 const ENC_PREFIX = 'enc:';
 
 interface RowMeta { key: string; seq: number }
+type TursoOutboxOp = { id: number; op: 'clear' | 'upsert' | 'delete'; tbl: string; k: string | null; seq: number | null; data: string | null };
 
 /**
  * Data lives in memory (fast reads, same API as before) and is persisted to SQLite row by row: a change writes only
@@ -101,6 +103,8 @@ class DatabaseManager {
   private journal: (() => void)[] = [];
   private transactionDepth = 0;
   private nextSeq = 1;
+  private turso: Client | null = null;
+  private tursoDrain: Promise<void> | null = null;
 
   constructor() {
     this.data = JSON.parse(JSON.stringify(INITIAL_EMPTY_SCHEMA));
@@ -116,29 +120,145 @@ class DatabaseManager {
     this.sql = new sqlite.DatabaseSync(SQLITE_FILE);
     this.sql.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=10000;');
     this.sql.exec('CREATE TABLE IF NOT EXISTS rows(tbl TEXT NOT NULL, k TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(tbl, k)) WITHOUT ROWID');
+    this.sql.exec('CREATE TABLE IF NOT EXISTS turso_outbox(id INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT NOT NULL, tbl TEXT NOT NULL, k TEXT, seq INTEGER, data TEXT)');
     this.stmt = {
       upsert: this.sql.prepare('INSERT OR REPLACE INTO rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)'),
       remove: this.sql.prepare('DELETE FROM rows WHERE tbl = ? AND k = ?'),
       clearTable: this.sql.prepare('DELETE FROM rows WHERE tbl = ?')
     };
     const count = Number(this.sql.prepare('SELECT COUNT(*) AS n FROM rows').get().n);
-    this.data = JSON.parse(JSON.stringify(INITIAL_EMPTY_SCHEMA));
-    this.index.clear();
     if (count === 0 && fs.existsSync(LEGACY_JSON) && fs.statSync(LEGACY_JSON).size > 0) {
       this.importLegacyJson();
     } else {
-      let maxSeq = 0;
-      for (const r of this.sql.prepare('SELECT tbl, k, seq, data FROM rows ORDER BY tbl, seq').iterate()) {
-        const row = this.deserialize(r.tbl, JSON.parse(r.data));
-        const table = ((this.data as any)[r.tbl] ||= []) as any[];
-        table.push(row);
-        this.meta.set(row, { key: r.k, seq: Number(r.seq) });
-        this.indexOf(r.tbl).set(r.k, row);
-        if (Number(r.seq) > maxSeq) maxSeq = Number(r.seq);
-      }
-      this.nextSeq = maxSeq + 1;
+      this.reloadFromSqlite();
     }
     this.isLoaded = true;
+  }
+
+  private reloadFromSqlite(): void {
+    this.data = JSON.parse(JSON.stringify(INITIAL_EMPTY_SCHEMA));
+    this.index.clear();
+    this.meta = new WeakMap<object, RowMeta>();
+    let maxSeq = 0;
+    for (const r of this.sql.prepare('SELECT tbl, k, seq, data FROM rows ORDER BY tbl, seq').iterate()) {
+      const row = this.deserialize(r.tbl, JSON.parse(r.data));
+      const table = ((this.data as any)[r.tbl] ||= []) as any[];
+      table.push(row);
+      this.meta.set(row, { key: r.k, seq: Number(r.seq) });
+      this.indexOf(r.tbl).set(r.k, row);
+      if (Number(r.seq) > maxSeq) maxSeq = Number(r.seq);
+    }
+    this.nextSeq = maxSeq + 1;
+  }
+
+  /** Connect the local SQLite cache to a Turso database and restore the cloud copy before migrations run. */
+  public async connectTurso(): Promise<void> {
+    if (this.turso) return;
+    const url = process.env.TURSO_DATABASE_URL?.trim();
+    const authToken = process.env.TURSO_AUTH_TOKEN?.trim();
+    if (!url && !authToken) return;
+    if (!url || (!authToken && !url.startsWith('file:'))) {
+      throw new Error('Turso ulanishi uchun TURSO_DATABASE_URL va TURSO_AUTH_TOKEN sozlanishi kerak.');
+    }
+
+    const client = createClient({ url, ...(authToken ? { authToken } : {}) });
+    await client.execute('CREATE TABLE IF NOT EXISTS distropro_rows (tbl TEXT NOT NULL, k TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tbl, k))');
+    const result = await client.execute('SELECT tbl, k, seq, data FROM distropro_rows ORDER BY tbl, seq');
+    const remoteRows = result.rows.map((r: any) => ({ tbl: String(r.tbl), k: String(r.k), seq: Number(r.seq), data: String(r.data) }));
+    const localCount = Number(this.sql.prepare('SELECT COUNT(*) AS n FROM rows').get().n);
+
+    if (remoteRows.length === 0) {
+      // First connection: preserve any existing SQLite data by seeding the empty Turso table.
+      if (localCount > 0) await this.writeTursoRows(client, this.sql.prepare('SELECT tbl, k, seq, data FROM rows ORDER BY tbl, seq').all());
+    } else {
+      // Cloud is authoritative after the first sync. Replay the durable local outbox over the snapshot.
+      const pending = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id').all() as TursoOutboxOp[];
+      this.sql.exec('BEGIN IMMEDIATE');
+      try {
+        this.sql.exec('DELETE FROM rows');
+        const put = this.sql.prepare('INSERT OR REPLACE INTO rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)');
+        for (const row of remoteRows) put.run(row.tbl, row.k, row.seq, row.data);
+        this.applyOutboxToLocal(pending);
+        this.sql.exec('COMMIT');
+      } catch (error) {
+        try { this.sql.exec('ROLLBACK'); } catch { /* not started */ }
+        throw error;
+      }
+      this.reloadFromSqlite();
+    }
+
+    this.turso = client;
+    await this.flushTurso();
+    const timer = setInterval(() => { void this.flushTurso().catch(error => console.error('[Turso] Sinxronlash xatosi:', error.message)); }, 5000);
+    timer.unref?.();
+    console.log('[Turso] Ulanish tayyor; ma’lumotlar masofaviy bazaga sinxronlanadi.');
+  }
+
+  private applyOutboxToLocal(ops: TursoOutboxOp[]): void {
+    const remove = this.sql.prepare('DELETE FROM rows WHERE tbl = ? AND k = ?');
+    const clear = this.sql.prepare('DELETE FROM rows WHERE tbl = ?');
+    const put = this.sql.prepare('INSERT OR REPLACE INTO rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)');
+    for (const op of ops) {
+      if (op.op === 'clear') clear.run(op.tbl);
+      else if (op.op === 'delete' && op.k !== null) remove.run(op.tbl, op.k);
+      else if (op.op === 'upsert' && op.k !== null && op.seq !== null && op.data !== null) put.run(op.tbl, op.k, op.seq, op.data);
+    }
+  }
+
+  private async writeTursoRows(client: Client, rows: any[]): Promise<void> {
+    for (let start = 0; start < rows.length; start += 200) {
+      const tx = await client.transaction('write');
+      try {
+        for (const row of rows.slice(start, start + 200)) {
+          await tx.execute({ sql: 'INSERT OR REPLACE INTO distropro_rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)', args: [row.tbl, row.k, Number(row.seq), row.data] });
+        }
+        await tx.commit();
+      } catch (error) {
+        try { await tx.rollback(); } catch { /* not started */ }
+        throw error;
+      }
+    }
+  }
+
+  /** Wait until every locally committed write has reached Turso. Mutating API responses use this as a durability barrier. */
+  public isTursoEnabled(): boolean { return this.turso !== null; }
+
+  public async flushTurso(): Promise<void> {
+    if (!this.turso || !this.sql) return;
+    if (this.tursoDrain) {
+      await this.tursoDrain;
+      if (Number(this.sql.prepare('SELECT COUNT(*) AS n FROM turso_outbox').get().n) > 0) return this.flushTurso();
+      return;
+    }
+    const work = this.drainTursoOutbox();
+    this.tursoDrain = work;
+    try { await work; }
+    finally { if (this.tursoDrain === work) this.tursoDrain = null; }
+    if (Number(this.sql.prepare('SELECT COUNT(*) AS n FROM turso_outbox').get().n) > 0) return this.flushTurso();
+  }
+
+  private async drainTursoOutbox(): Promise<void> {
+    while (true) {
+      const ops = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id LIMIT 200').all() as TursoOutboxOp[];
+      if (!ops.length) return;
+      const tx = await this.turso!.transaction('write');
+      try {
+        for (const op of ops) {
+          if (op.op === 'clear') await tx.execute({ sql: 'DELETE FROM distropro_rows WHERE tbl = ?', args: [op.tbl] });
+          else if (op.op === 'delete' && op.k !== null) await tx.execute({ sql: 'DELETE FROM distropro_rows WHERE tbl = ? AND k = ?', args: [op.tbl, op.k] });
+          else if (op.op === 'upsert' && op.k !== null && op.seq !== null && op.data !== null) {
+            await tx.execute({ sql: 'INSERT OR REPLACE INTO distropro_rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)', args: [op.tbl, op.k, op.seq, op.data] });
+          }
+        }
+        await tx.commit();
+      } catch (error) {
+        try { await tx.rollback(); } catch { /* not started */ }
+        throw error;
+      }
+      const ids = ops.map(op => op.id);
+      const placeholders = ids.map(() => '?').join(',');
+      this.sql.prepare(`DELETE FROM turso_outbox WHERE id IN (${placeholders})`).run(...ids);
+    }
   }
 
   /** One-time move from finance_db.json; the JSON stays as finance_db.json.imported-<time>. */
@@ -227,9 +347,11 @@ class DatabaseManager {
   private flush(): void {
     if (!this.sql || (!this.dirty.size && !this.fullDirty.size)) return;
     const { upsert, remove, clearTable } = this.stmt!;
+    const enqueue = this.turso ? this.sql.prepare('INSERT INTO turso_outbox(op, tbl, k, seq, data) VALUES (?, ?, ?, ?, ?)') : null;
     this.sql.exec('BEGIN IMMEDIATE');
     try {
       for (const table of this.fullDirty) {
+        enqueue?.run('clear', table, null, null, null);
         clearTable.run(table);
         const rows = ((this.data as any)[table] || []) as any[];
         const idx = this.indexOf(table);
@@ -237,7 +359,9 @@ class DatabaseManager {
         for (const row of rows) {
           const m = this.meta.get(row) || this.ensureMeta(table, row);
           idx.set(m.key, row);
-          upsert.run(table, m.key, m.seq, this.serialize(table, row));
+          const data = this.serialize(table, row);
+          upsert.run(table, m.key, m.seq, data);
+          enqueue?.run('upsert', table, m.key, m.seq, data);
         }
         this.dirty.delete(table);
       }
@@ -245,8 +369,15 @@ class DatabaseManager {
         const idx = this.indexOf(table);
         for (const key of keys) {
           const row = idx.get(key);
-          if (row) upsert.run(table, key, this.meta.get(row)!.seq, this.serialize(table, row));
-          else remove.run(table, key);
+          if (row) {
+            const seq = this.meta.get(row)!.seq;
+            const data = this.serialize(table, row);
+            upsert.run(table, key, seq, data);
+            enqueue?.run('upsert', table, key, seq, data);
+          } else {
+            remove.run(table, key);
+            enqueue?.run('delete', table, key, null, null);
+          }
         }
       }
       this.sql.exec('COMMIT');
@@ -256,6 +387,7 @@ class DatabaseManager {
     }
     this.dirty.clear();
     this.fullDirty.clear();
+    if (this.turso) void this.flushTurso().catch(error => console.error('[Turso] Sinxronlash navbatda qoldi:', error.message));
   }
 
   /** Kept for callers of the old API: writes whatever is pending. */
