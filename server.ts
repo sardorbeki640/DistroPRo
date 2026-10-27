@@ -63,7 +63,9 @@ async function startServer() {
   const portArg = portArgIndex !== -1 ? process.argv[portArgIndex + 1] : undefined;
   const hostArg = hostArgIndex !== -1 ? process.argv[hostArgIndex + 1] : undefined;
   const PORT = Number(process.env.PORT || portArg || 3000);
-  const HOST = process.env.HOST || hostArg || '127.0.0.1';
+  // Cloud platforms such as Render route traffic to the container's external interface.
+  // Local launch scripts can still set HOST=127.0.0.1 explicitly.
+  const HOST = process.env.HOST || hostArg || '0.0.0.0';
 
   // Behind a reverse proxy on the same machine (Caddy on the cloud server): req.ip is the visitor, not 127.0.0.1,
   // so login attempts are limited per visitor. Only the local proxy is trusted.
