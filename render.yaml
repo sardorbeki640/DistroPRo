@@ -2,24 +2,20 @@ services:
   - type: web
     name: distropro
     runtime: node
-    plan: starter
+    plan: free
     repo: https://github.com/sardorbeki640/DistroPRo.git
     branch: main
     buildCommand: corepack enable && corepack prepare pnpm@11.25.0 --activate && pnpm install --frozen-lockfile && pnpm run build
     startCommand: pnpm start
     healthCheckPath: /api/health
     autoDeployTrigger: commit
-    disk:
-      name: distro-pro-data
-      mountPath: /var/data
-      sizeGB: 10
     envVars:
       - key: NODE_VERSION
         value: 24.19.0
       - key: NODE_ENV
         value: production
       - key: FINANCE_DATA_DIR
-        value: /var/data
+        value: .data
       - key: JWT_SECRET
         sync: false
       - key: OWNER_EMAIL

@@ -41,10 +41,10 @@ test('partial rejection cannot appear as confirmed and tenant access is enforced
  assert.equal((await CashPostingService.save('c','day',a)).confirmed,0);
  await assert.rejects(()=>CashPostingService.save('other','day',a),/topilmadi/);
 });
-test('ambiguous home payment blocks export before any network write',async()=>{
- fixture();db.update('daily_order_entries','row',{uy_oplata:10});const a=new SalesDocAdapter();let calls=0;
- a.executeSalesDocMethod=async()=>{calls++;return {completed:1,error:0};};
- await assert.rejects(()=>CashPostingService.save('c','day',a),/Uy oplata/);assert.equal(calls,0);
+test('legacy home payment does not create a separate SalesDoc payment method',async()=>{
+ fixture();db.update('daily_order_entries','row',{uy_oplata:10});const a=new SalesDocAdapter();
+ await CashPostingService.save('c','day',a);
+ assert.deepEqual(db.find('integration_transactions',()=>true).map(t=>(t.payload as any).method).sort(),['CASH','TERMINAL']);
 });
 test('100 calendar days, delivered sales only, real product identity and fractional demand',()=>{
  db.insert('integrations',{id:'i',company_id:'c',provider_name:'SALESDOC',config:{forecast_days:100}} as any);

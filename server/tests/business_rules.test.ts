@@ -236,6 +236,7 @@ test('an earlier refusal stored as uncertain is released once SalesDoc shows no 
 });
 
 test('a real cost entered by hand is not erased by a 1 so‘m placeholder from SalesDoc; a real SalesDoc cost wins', async () => {
+  db.insert('integrations', { id: 'i', company_id: 'c', provider_name: 'SALESDOC', status: 'CONNECTED', config: {} } as any);
   db.insert('products', { id: 'p', company_id: 'c', sku: 'd0_1', name: 'A', is_active: true, source: 'SALESDOC', purchase_cost: 600, current_cost: 600, selling_price: 1000, source_integration_id: 'i' } as any);
   const adapter: any = { importProducts: async () => [{ sku: 'd0_1', name: 'A', purchase_cost: 1, selling_price: 1000, prices: [{ type_id: 'd0_3', name: 'Келиш Нарх', kind: 'purchase', currency: null, price: 1 }] }] };
   await (SalesDocHistoryService as any).importProducts('c', 'i', adapter, {});

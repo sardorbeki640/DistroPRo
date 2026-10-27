@@ -149,7 +149,7 @@ test('penalties go to “Jarimalar YYYY-MM” by themselves: each once, with the
  const v=AttendanceService.addViolation('c',{employee_id:'e-vali',date:'2026-10-03',type:'NASIYA_MISUSE',note:'mijoz pulini ishlatdi'},owner);
  db.removeWhere('sheet_rows',()=>true);           // only the penalties are looked at here
  AttendanceService.exportPenalties(now,'c');
- const rows=db.find('sheet_rows',r=>r.sheet==='Jarimalar 2026-10').sort((a,b)=>a.id.localeCompare(b.id));
+ const rows=db.find('sheet_rows',r=>r.sheet==='Jarimalar').sort((a,b)=>a.id.localeCompare(b.id));
  const mine=rows.filter(r=>r.values[1]==='Vali Dostavchi');
  const late=mine.filter(r=>r.values[4]==='Ishga kech qolish / kech boshlash');
  assert.deepEqual(late.map(r=>[r.values[0],r.values[5],r.values[6]]),[['01.10.2026','20 daqiqa kech',0.5],['02.10.2026','5 daqiqa kech',0.5]]);
@@ -167,13 +167,13 @@ test('penalties go to “Jarimalar YYYY-MM” by themselves: each once, with the
  // A cancelled one gets a row under it.
  AttendanceService.cancelViolation('c',v.id,'xato kiritildi',owner);
  const cx=db.findById('sheet_rows',`c:pencx:${v.id}`)!;
- assert.deepEqual([cx.sheet,cx.values[8]],['Jarimalar 2026-10','BEKOR QILINDI']);
+ assert.deepEqual([cx.sheet,cx.values[8]],['Jarimalar','BEKOR QILINDI']);
  // Sent with the penalties header.
  const posts:any[]=[];
  SheetsService.fetchImpl=(async(_u:string,init:any)=>{posts.push(JSON.parse(init.body));return {status:200,text:async()=>JSON.stringify({ok:true,added:1})} as any;}) as any;
  await SheetsService.flush(Date.now());
- const g=posts[0].groups.find((x:any)=>x.sheet==='Jarimalar 2026-10');
- assert.equal(g.header[6],'Jarima, %');
+ const g=posts[0].groups.find((x:any)=>x.sheet==='Jarimalar');
+ assert.equal(g.header[6],'Jarima (so‘m yoki %)');
  assert.match(SheetsService.view('c').script,/g\.header \|\| body\.header/);
 });
 

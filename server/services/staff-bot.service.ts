@@ -205,9 +205,10 @@ export class StaffBotService {
             const amountText = dayAmount === null
               ? 'Jarima summasi: maosh tarkibi kiritilmagan, so‘mda hisoblab bo‘lmadi.'
               : `Bugungi jami jarima: <b>${money(dayAmount)} so‘m</b> (${dayPercent}%). Oy boshidan jami: <b>${money(monthAmount!)} so‘m</b> (${total}%).`;
+            const percentText = `Jarima: <b>${o.percent}%</b>. Shu oy jami: <b>${total}%</b> (${i + 1} ta qoidabuzarlik).`;
             db.insert('notifications', {
               id, company_id, channel_id: bot.id, channel_type: 'TELEGRAM', title: `⚠️ ${name}: jarima`,
-              content: `${o.date.split('-').reverse().join('.')} — ${what}\nShu holat: <b>${o.percent}%</b>. ${amountText} (${i + 1} ta qoidabuzarlik hisoblangan).`,
+              content: `${o.date.split('-').reverse().join('.')} — ${what}\n${percentText} ${amountText}`,
               status: 'PENDING', attempt_count: 0, recipient: chat, personal_chat_id: chat, created_at: new Date().toISOString(), sent_at: null
             } as any);
           });

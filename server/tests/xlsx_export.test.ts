@@ -36,10 +36,10 @@ test('cash day export uses the register fields the cash screen shows',()=>{
  db.insert('companies',{id:'c',name:'Test MChJ'} as any);
  db.insert('cash_days',{id:'d',company_id:'c',date:'2026-09-30',status:'OPEN',opening_balance:5,cash_payment:0,terminal_payment:0,click_payment:0,credit_collection:0,calculated_closing_balance:5} as any);
  db.insert('customers',{id:'k',company_id:'c',code:'a0_1',name:'Do‘kon',phone:'',credit_limit:0,current_balance:0,status:'ACTIVE',is_active:true,created_at:''} as any);
- db.insert('daily_order_entries',{id:'e',company_id:'c',cash_day_id:'d',order_number:'77',order_date:'2026-09-30',customer_id:'k',sale_amount:1000,cash_payment:300,uy_oplata:200,nasiyadan_kirim:50,terminal_click:100,remaining_debt:400,created_at:''} as any);
+ db.insert('daily_order_entries',{id:'e',company_id:'c',cash_day_id:'d',order_number:'77',order_date:'2026-09-30',customer_id:'k',sale_amount:1000,cash_payment:300,nasiya_perech:200,nasiyadan_kirim:50,terminal_click:100,remaining_debt:400,created_at:''} as any);
  const [register,movements]=CashService.exportCashDaySheets('c','d');
  const row=register.rows[0] as any;
- assert.deepEqual([row.sale_amount,row.cash_payment,row.uy_oplata,row.nasiyadan_kirim,row.terminal_click,row.remaining_debt],[1000,300,200,50,100,400]);
+ assert.deepEqual([row.sale_amount,row.cash_payment,row.nasiya_perech,row.nasiyadan_kirim,row.terminal_click,row.remaining_debt],[1000,300,200,50,100,400]);
  assert.equal(row.code,'a0_1');
  assert.ok(register.subtitle!.includes('Test MChJ'));
  assert.equal(movements.summary![0].value,5);

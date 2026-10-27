@@ -40,9 +40,9 @@ test('owner gives a staff login with a short password; changing it at first sign
   assert.equal(first.user.must_change_password, false, 'no forced change unless the owner asks');
   assert.equal(first.user.employee_id, 'e1');
   assert.throws(() => AuthService.changePassword(acc.user_id, 'wrong', 'NewPass-2026'), /noto/);
-  assert.throws(() => AuthService.changePassword(acc.user_id, acc.temporary_password, '123'), /6 belgi/);
-  AuthService.changePassword(acc.user_id, acc.temporary_password, '777888');
-  assert.equal((await AuthService.login('901234567', '777888')).user.must_change_password, false);
+  assert.throws(() => AuthService.changePassword(acc.user_id, acc.temporary_password, '123'), /8 belgi/);
+  AuthService.changePassword(acc.user_id, acc.temporary_password, '77788899');
+  assert.equal((await AuthService.login('901234567', '77788899')).user.must_change_password, false);
   // The owner may type the password and ask for a change at first sign-in.
   db.insert('employees', { id: 'e4', company_id: C, full_name: 'D', position: 'x', phone: '', salary_type: 'FIXED', status: 'ACTIVE', created_at: today } as any);
   const typed = StaffService.createAccount(owner, 'e4', { login: 'dilshod', role_id: 'role-employee', password: 'dil2026', must_change: true });
@@ -61,7 +61,7 @@ test('an admin cannot hand out owner rights; blocked account cannot sign in; res
   assert.throws(() => StaffService.createAccount(adminActor, 'e3', { login: 'g1', role_id: 'role-superadmin' }), /SUPER_ADMIN/);
   assert.throws(() => StaffService.setStatus(adminActor, 'owner', 'INACTIVE'), /egasi/i);
   StaffService.setStatus(owner, admin.user_id, 'INACTIVE');
-  await assert.rejects(() => AuthService.login('vali', admin.temporary_password), /bloklangan/);
+  await assert.rejects(() => AuthService.login('vali', admin.temporary_password), /noto'g'ri/);
   StaffService.setStatus(owner, admin.user_id, 'ACTIVE');
   const reset = StaffService.resetPassword(owner, admin.user_id, { password: 'vali-new1' });
   assert.equal(reset.temporary_password, 'vali-new1');

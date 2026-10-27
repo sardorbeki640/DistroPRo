@@ -82,8 +82,8 @@ export class BotService {
     const checkinEnabled = input.checkin_enabled ?? (existing?.config?.checkin_enabled === true || !!(input.checkin_chat_id || existing?.config?.checkin_chat_id));
     // A bot only for employees' personal reminders needs no group chat.
     if (chatId && !/^-?\d{3,}$/.test(chatId) && !/^@\w{4,}$/.test(chatId)) throw new Error('Chat ID raqam (guruhda -100… bilan) yoki @kanal_nomi bo‘lishi kerak. “Chatni topish” tugmasidan foydalaning.');
+    if (!chatId && !personal && !checkinEnabled && !existing) throw new Error('Chat ID kiriting yoki bot vazifasini tanlang: shaxsiy eslatmalar yoki davomat guruhlari.');
     if (events.length && !chatId) throw new Error('Rahbariyat xabarlari tanlangan — ular uchun chat tanlang yoki xabar turlarini olib tashlang.');
-    if (!chatId && !personal && !checkinEnabled && !existing) throw new Error('Bot vazifasini tanlang: rahbariyat xabarlari, shaxsiy eslatmalar yoki davomat guruhlarini o‘qish.');
     const minutes = (v: unknown, fallback: number, max: number) => { const n = Number(v ?? fallback); if (!Number.isInteger(n) || n < 0 || n > max) throw new Error(`Daqiqa 0–${max} oralig‘ida bo‘lsin.`); return n; };
     const prev = StaffBotService.settingsOf(existing);
     const personalCfg = {
