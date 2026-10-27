@@ -18,6 +18,7 @@ import { geminiModelUpdateMigration } from './server/db/migrations/013_gemini_mo
 import { disableSampleBotMigration } from './server/db/migrations/014_disable_sample_bot.ts';
 import { removeTestExpenseCategoriesMigration } from './server/db/migrations/015_remove_test_expense_categories.ts';
 import { removeDefaultSalesDoctorMigration } from './server/db/migrations/016_remove_default_salesdoctor.ts';
+import { removeSalesDoctorDefaultEndpointMigration } from './server/db/migrations/017_remove_salesdoctor_default_endpoint.ts';
 import { startBotScheduler } from './server/services/bot.service.ts';
 import { startStaffBotScheduler } from './server/services/staff-bot.service.ts';
 import { startSheetsScheduler } from './server/services/sheets.service.ts';
@@ -95,6 +96,7 @@ async function startServer() {
     migrator.register(disableSampleBotMigration);
     migrator.register(removeTestExpenseCategoriesMigration);
     migrator.register(removeDefaultSalesDoctorMigration);
+    migrator.register(removeSalesDoctorDefaultEndpointMigration);
     const result = await migrator.run();
     console.log(`[DB Boot] Migrations applied: ${result.executed.length}, previously applied: ${result.alreadyApplied.length}`);
   } catch (err) {
