@@ -119,8 +119,8 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
       provider_name: 'SALESDOC',
       name: 'SalesDoctor (SalesDoc.io API V2)',
       url: 'https://github.com/Clever91/salesdoc-api-doc',
-      // Do not make an unconfigured vendor endpoint look like a saved server connection.
-      defaultUrl: '',
+      // Use the user's actual SalesDoc instance; this adapter speaks the documented /api/v2 protocol.
+      defaultUrl: 'https://namdistribution.salesdoc.io/api/v2',
       description: 'Clever91/salesdoc-api-doc rasmiy spetsifikatsiyasi bo\'yicha to\'liq integratsiya. POST /api/v2 yagona endpoint, avtomatik login/token, ombor qoldiqlari (getStock), agent buyurtmalari (getOrder) va nasiya balansi (getBalance).',
       syncFeatures: [
         'POST /api/v2: Yagona endpoint & JSON so\'rov protokoli',
