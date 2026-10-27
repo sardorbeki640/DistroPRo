@@ -206,17 +206,14 @@ class DatabaseManager {
   }
 
   private async writeTursoRows(client: Client, rows: any[]): Promise<void> {
-    for (let start = 0; start < rows.length; start += 200) {
-      const tx = await client.transaction('write');
-      try {
-        for (const row of rows.slice(start, start + 200)) {
-          await tx.execute({ sql: 'INSERT OR REPLACE INTO distropro_rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)', args: [row.tbl, row.k, Number(row.seq), row.data] });
-        }
-        await tx.commit();
-      } catch (error) {
-        try { await tx.rollback(); } catch { /* not started */ }
-        throw error;
-      }
+    // Use a single HTTP batch per small chunk. Sequential execute() calls inside an
+    // interactive transaction can leave the Turso stream idle long enough to expire.
+    for (let start = 0; start < rows.length; start += 50) {
+      const statements = rows.slice(start, start + 50).map(row => ({
+        sql: 'INSERT OR REPLACE INTO distropro_rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)',
+        args: [row.tbl, row.k, Number(row.seq), row.data]
+      }));
+      await client.batch(statements, 'write');
     }
   }
 
@@ -239,22 +236,19 @@ class DatabaseManager {
 
   private async drainTursoOutbox(): Promise<void> {
     while (true) {
-      const ops = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id LIMIT 200').all() as TursoOutboxOp[];
+      const ops = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id LIMIT 50').all() as TursoOutboxOp[];
       if (!ops.length) return;
-      const tx = await this.turso!.transaction('write');
-      try {
-        for (const op of ops) {
-          if (op.op === 'clear') await tx.execute({ sql: 'DELETE FROM distropro_rows WHERE tbl = ?', args: [op.tbl] });
-          else if (op.op === 'delete' && op.k !== null) await tx.execute({ sql: 'DELETE FROM distropro_rows WHERE tbl = ? AND k = ?', args: [op.tbl, op.k] });
-          else if (op.op === 'upsert' && op.k !== null && op.seq !== null && op.data !== null) {
-            await tx.execute({ sql: 'INSERT OR REPLACE INTO distropro_rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)', args: [op.tbl, op.k, op.seq, op.data] });
-          }
+      const statements = ops.flatMap(op => {
+        if (op.op === 'clear') return [{ sql: 'DELETE FROM distropro_rows WHERE tbl = ?', args: [op.tbl] }];
+        if (op.op === 'delete' && op.k !== null) return [{ sql: 'DELETE FROM distropro_rows WHERE tbl = ? AND k = ?', args: [op.tbl, op.k] }];
+        if (op.op === 'upsert' && op.k !== null && op.seq !== null && op.data !== null) {
+          return [{ sql: 'INSERT OR REPLACE INTO distropro_rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)', args: [op.tbl, op.k, op.seq, op.data] }];
         }
-        await tx.commit();
-      } catch (error) {
-        try { await tx.rollback(); } catch { /* not started */ }
-        throw error;
-      }
+        return [];
+      });
+      // A batch is atomic on the remote database, avoids a long-lived interactive
+      // transaction, and preserves operation order (including clear + reinsert).
+      await this.turso!.batch(statements, 'write');
       const ids = ops.map(op => op.id);
       const placeholders = ids.map(() => '?').join(',');
       this.sql.prepare(`DELETE FROM turso_outbox WHERE id IN (${placeholders})`).run(...ids);
