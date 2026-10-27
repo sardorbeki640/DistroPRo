@@ -42,6 +42,15 @@ export class StaffBotService {
     return db.findOne('notification_channels', c => c.company_id === company_id && c.channel_type === 'TELEGRAM' && c.is_active && c.config?.personal === true && !!c.config?.bot_token) || null;
   }
 
+  /** One configured bot reads attendance groups even when private reminders are turned off. */
+  static attendanceBot(company_id: string): NotificationChannel | null {
+    const bots = db.find('notification_channels', c => c.company_id === company_id && c.channel_type === 'TELEGRAM' && c.is_active && !!c.config?.bot_token);
+    return bots.find(c => c.config?.checkin_enabled === true)
+      || bots.find(c => !!c.config?.checkin_chat_id)
+      || bots.find(c => c.config?.personal === true)
+      || null;
+  }
+
   static settingsOf(bot: NotificationChannel | null) {
     const c = bot?.config || {};
     return {
@@ -238,7 +247,7 @@ export class StaffBotService {
 
   /** Group chats the bot has seen (it was added there or someone wrote there), to choose from. */
   static groupChats(company_id: string) {
-    const bot = this.personalBot(company_id);
+    const bot = this.attendanceBot(company_id);
     const chats: { id: string; title: string; type: string }[] = Array.isArray(bot?.config?.recent_chats) ? bot!.config.recent_chats : [];
     return { bot_username: bot?.config?.bot_username || null, chats: chats.filter(c => c.type === 'group' || c.type === 'supergroup') };
   }
@@ -256,36 +265,57 @@ export class StaffBotService {
     const offset = Number(bot.config.update_offset || 0);
     let updates: any[];
     try {
-      updates = await TelegramService.call(bot.config.bot_token!, 'getUpdates', { offset: offset ? offset + 1 : undefined, limit: 100, timeout: 0, allowed_updates: ['message', 'my_chat_member', 'channel_post'] });
+      updates = await TelegramService.getUpdates(bot.config.bot_token!, { offset: offset ? offset + 1 : undefined, limit: 100, timeout: 0, allowed_updates: ['message', 'my_chat_member', 'channel_post'] });
     } catch (err: any) {
-      if (/conflict|webhook/i.test(err.message)) console.warn('[StaffBot] getUpdates:', err.message);
+      const fresh = db.findById('notification_channels', bot.id);
+      if (fresh) db.update('notification_channels', bot.id, { config: { ...fresh.config, poll_error: err.message, last_poll_at: new Date().toISOString() } });
+      console.warn('[StaffBot] getUpdates:', err.message);
       return 0;
     }
-    if (!updates.length) return 0;
     const recent: { id: string; title: string; type: string }[] = Array.isArray(bot.config.recent_chats) ? bot.config.recent_chats : [];
     let last = offset;
+    let lastUpdate: any = bot.config.last_update || null;
     for (const u of updates) {
       last = Math.max(last, Number(u.update_id) || 0);
       const chat = u.message?.chat || u.my_chat_member?.chat || u.channel_post?.chat;
+      if (u.message || u.channel_post) {
+        const m = u.message || u.channel_post;
+        const settings = AttendanceService.settings(bot.company_id);
+        const chatId = String(chat?.id ?? '');
+        const groupMatch = Object.entries(settings.checkin_groups || {}).find(([, id]) => String(id) === chatId);
+        const employeeMatch = Object.entries(settings.checkin_employee_groups || {}).find(([, id]) => String(id) === chatId);
+        const legacyMatch = !!bot.config.checkin_chat_id && chatId === String(bot.config.checkin_chat_id);
+        const video = !!(m.video_note || m.video || m.animation || m.document);
+        lastUpdate = {
+          at: new Date(Number(m.date || Date.now() / 1000) * 1000).toISOString(),
+          chat: chat?.title || chat?.username || String(chat?.id || 'Noma’lum chat'),
+          sender: [m.from?.first_name, m.from?.last_name].filter(Boolean).join(' ') || m.from?.username || 'Noma’lum yuboruvchi',
+          kind: m.video_note ? 'Dumaloq video' : m.video ? 'Oddiy video' : m.text ? 'Matn' : video ? 'Fayl' : 'Boshqa xabar',
+          checkin_group: !!(groupMatch || employeeMatch || legacyMatch),
+          checkin_result: video ? (groupMatch || employeeMatch || legacyMatch ? 'Davomat guruhi topildi' : 'Guruh ID mos kelmadi') : null
+        };
+      }
       if (chat) {
         const title = chat.title || [chat.first_name, chat.last_name].filter(Boolean).join(' ') || chat.username || String(chat.id);
         const i = recent.findIndex(c => c.id === String(chat.id));
         if (i >= 0) recent.splice(i, 1);
         recent.unshift({ id: String(chat.id), title, type: chat.type });
       }
-      // A round video in the couriers' group: the start of work of whoever posted it.
-      if (u.message?.video_note) {
+      // Shared work-group check-ins, each agent's own group, and the older bot-form check-in group.
+      if (u.message?.video_note || u.message?.video) {
         const settings = AttendanceService.settings(bot.company_id);
-        const match = Object.entries(settings.checkin_groups || {}).find(([, id]) => String(id) === String(chat?.id));
-        const hasGroupRoutes = Object.keys(settings.checkin_groups || {}).length > 0;
-        const legacyMatch = !hasGroupRoutes && bot.config.checkin_chat_id && String(chat?.id) === String(bot.config.checkin_chat_id);
-        if (match || legacyMatch) {
-          try { await this.handleVideo(bot, u.message, match?.[0]); } catch (err: any) { console.warn('[StaffBot] video:', err.message); }
+        const chatId = String(chat?.id ?? '');
+        const groupMatch = Object.entries(settings.checkin_groups || {}).find(([, id]) => String(id) === chatId);
+        const employeeMatch = Object.entries(settings.checkin_employee_groups || {}).find(([, id]) => String(id) === chatId);
+        const legacyMatch = !!bot.config.checkin_chat_id && chatId === String(bot.config.checkin_chat_id);
+        if (groupMatch || employeeMatch || legacyMatch) {
+          try { await this.handleVideo(bot, u.message, groupMatch?.[0], employeeMatch?.[0]); } catch (err: any) { console.warn('[StaffBot] video:', err.message); }
         }
         continue;
       }
+      if (process.env.TELEGRAM_POLLING_ONLY === '1') continue;
       const text = String(u.message?.text || '').trim();
-      if (!u.message || chat?.type !== 'private' || !text.startsWith('/')) continue;
+      if (!bot.config.personal || !u.message || chat?.type !== 'private' || !text.startsWith('/')) continue;
       const chatId = String(chat.id);
       const name = [chat.first_name, chat.last_name].filter(Boolean).join(' ') + (chat.username ? ` (@${chat.username})` : '');
       try {
@@ -295,7 +325,7 @@ export class StaffBotService {
       }
     }
     const fresh = db.findById('notification_channels', bot.id);
-    if (fresh) db.update('notification_channels', bot.id, { config: { ...fresh.config, update_offset: last, recent_chats: recent.slice(0, 20) } });
+    if (fresh) db.update('notification_channels', bot.id, { config: { ...fresh.config, update_offset: last, recent_chats: recent.slice(0, 20), last_update: lastUpdate, poll_error: null, last_poll_at: new Date().toISOString() } });
     return updates.length;
   }
 
@@ -303,12 +333,13 @@ export class StaffBotService {
    * A video note posted in the check-in group. The time is Telegram's (when it received the message), not the phone's.
    * Forwarded or very short videos do not count. The poster is found by their linked private chat (user id = chat id).
    */
-  private static async handleVideo(bot: NotificationChannel, m: any, expectedGroupId?: string) {
+  private static async handleVideo(bot: NotificationChannel, m: any, expectedGroupId?: string, expectedEmployeeId?: string) {
     const company_id = bot.company_id;
-    const reply = (text: string) => TelegramService.call(bot.config.bot_token!, 'sendMessage', {
+    const reply = (text: string) => process.env.TELEGRAM_POLLING_ONLY === '1' ? Promise.resolve() : TelegramService.call(bot.config.bot_token!, 'sendMessage', {
       chat_id: m.chat.id, text, parse_mode: 'HTML', reply_parameters: { message_id: m.message_id, allow_sending_without_reply: true },
       ...(m.message_thread_id ? { message_thread_id: m.message_thread_id } : {})
     }).catch((err: any) => console.warn('[StaffBot] reply:', err.message));
+    if (!m.video_note) { await reply('❌ Davomat uchun Telegram’ning dumaloq video xabarini yuboring. Oddiy video qabul qilinmaydi.'); return; }
     if (m.forward_origin || m.forward_date || m.forward_from) { await reply('❌ Uzatilgan (forward) video hisobga olinmaydi — o‘zingiz yozib yuboring.'); return; }
     if (Number(m.video_note.duration || 0) < 2) { await reply('❌ Video juda qisqa — kamida 2 soniya yozing.'); return; }
     const fromId = String(m.from?.id || '');
@@ -316,10 +347,10 @@ export class StaffBotService {
     const employee_id = this.employeeOfTelegram(company_id, fromId);
     if (!employee_id) {
       // Not assigned yet: remembered for the admin to assign (the video then counts); nothing is said in the group.
-      this.rememberSender(bot, m.from, { at: new Date(Number(m.date) * 1000).toISOString(), ...tg, work_group_id: expectedGroupId || null });
+      this.rememberSender(bot, m.from, { at: new Date(Number(m.date) * 1000).toISOString(), ...tg, work_group_id: expectedGroupId || null, employee_group_id: expectedEmployeeId || null });
       return;
     }
-    const r: any = AttendanceService.recordVideo(company_id, employee_id, new Date(Number(m.date) * 1000), tg, expectedGroupId);
+    const r: any = AttendanceService.recordVideo(company_id, employee_id, new Date(Number(m.date) * 1000), tg, expectedGroupId, expectedEmployeeId);
     if (!r.already) await reply(escapeHtml(r.message));
   }
 
@@ -332,7 +363,7 @@ export class StaffBotService {
   }
 
   /** People who posted round videos in the group but are not assigned to an employee yet (kept with their last videos). */
-  private static rememberSender(bot: NotificationChannel, from: any, video: { at: string; chat_id: string; message_id: number; file_id?: string; duration: number; work_group_id?: string | null }) {
+  private static rememberSender(bot: NotificationChannel, from: any, video: { at: string; chat_id: string; message_id: number; file_id?: string; duration: number; work_group_id?: string | null; employee_group_id?: string | null }) {
     const fresh = db.findById('notification_channels', bot.id) || bot;
     const list: any[] = Array.isArray(fresh.config.video_senders) ? [...fresh.config.video_senders] : [];
     const id = String(from?.id || '');
@@ -349,7 +380,7 @@ export class StaffBotService {
 
   /** Unassigned video senders and every employee's Telegram account, for the admin. */
   static telegramAccounts(company_id: string) {
-    const bot = this.personalBot(company_id);
+    const bot = this.attendanceBot(company_id);
     const attendance = AttendanceService.settings(company_id);
     const assigned = new Set(db.find('employees', e => e.company_id === company_id && !!e.telegram_user_id).map(e => String(e.telegram_user_id)));
     const linked = new Set(db.find('staff_telegram', r => r.company_id === company_id && !!r.chat_id && !!r.employee_id).map(r => r.chat_id!));
@@ -360,7 +391,7 @@ export class StaffBotService {
       const link = db.findById('staff_telegram', `${company_id}:emp:${e.id}`);
       return { id: e.id, name: e.full_name, position: e.position, telegram_user_id: e.telegram_user_id || null, telegram_name: e.telegram_name || null, bot_linked: !!link?.chat_id && !link.blocked_at };
     }).sort((a, b) => a.name.localeCompare(b.name));
-    return { bot_username: bot?.config?.bot_username || null, checkin_group: Object.keys(attendance.checkin_groups || {}).length > 0 || !!bot?.config?.checkin_chat_id, senders, employees };
+    return { bot_username: bot?.config?.bot_username || null, checkin_group: Object.keys(attendance.checkin_groups || {}).length > 0 || Object.keys(attendance.checkin_employee_groups || {}).length > 0 || !!bot?.config?.checkin_chat_id, senders, employees, polling_error: bot?.config?.poll_error || null, last_poll_at: bot?.config?.last_poll_at || null, last_update: bot?.config?.last_update || null, poller_enabled: (process.env.DISABLE_BOTS !== '1' || process.env.ENABLE_TELEGRAM_POLLING === '1') && process.env.NODE_ENV !== 'test' };
   }
 
   /**
@@ -376,14 +407,14 @@ export class StaffBotService {
       const other = db.findOne('employees', x => x.company_id === company_id && x.id !== employee_id && String(x.telegram_user_id || '') === id);
       if (other) throw new Error(`Bu Telegram hisobi allaqachon ${other.full_name}ga biriktirilgan.`);
     }
-    const bot = this.personalBot(company_id);
+    const bot = this.attendanceBot(company_id);
     const sender = (Array.isArray(bot?.config?.video_senders) ? bot!.config.video_senders : []).find((x: any) => x.id === id);
     db.update('employees', employee_id, { telegram_user_id: id || null, telegram_name: id ? (sender?.name || e.telegram_name || null) : null } as any);
     AuditService.log({ company_id, user_id: actor.id, user_email: actor.email, action: 'UPDATE', entity: 'Employee', entity_id: employee_id, old_value: { telegram_user_id: e.telegram_user_id || null }, new_value: { telegram_user_id: id || null }, reason: `${e.full_name}: Telegram hisobi ${id ? 'biriktirildi' : 'olib tashlandi'}` });
     let counted = 0;
     if (id && sender?.videos?.length) {
       for (const v of [...sender.videos].sort((a: any, b: any) => a.at.localeCompare(b.at))) {
-        const r: any = AttendanceService.recordVideo(company_id, employee_id, new Date(v.at), { chat_id: v.chat_id, message_id: v.message_id, file_id: v.file_id, duration: v.duration }, v.work_group_id || undefined);
+        const r: any = AttendanceService.recordVideo(company_id, employee_id, new Date(v.at), { chat_id: v.chat_id, message_id: v.message_id, file_id: v.file_id, duration: v.duration }, v.work_group_id || undefined, v.employee_group_id || undefined);
         if (r.ok) counted++;
       }
       const fresh = db.findById('notification_channels', bot!.id)!;
@@ -441,7 +472,7 @@ export class StaffBotService {
         const s = AttendanceService.settings(company_id);
         for (const t of AttendanceService.tracked(company_id, s)) {
           if (t.since > today || !linked.some(r => r.employee_id === t.employee_id)) continue;
-          const plan = AttendanceService.planOf(s, t.employee_id);
+          const plan = AttendanceService.planOf(s, t.employee_id, today);
           const day = AttendanceService.dayFor(s, t.employee_id, today);
           if (!day.workday || day.first_in || day.excused) continue;
           const deadline = toMinutes(plan.start) + (plan.grace_minutes || 0);
@@ -498,17 +529,19 @@ export class StaffBotService {
 
 /** Every 20 s: new messages to the personal bots (linking); every minute: time-based reminders. */
 export function startStaffBotScheduler() {
+  const pollingOnly = process.env.TELEGRAM_POLLING_ONLY === '1';
   let busy = false;
   const poll = setInterval(async () => {
     if (busy) return;
     busy = true;
     try {
-      for (const bot of db.find('notification_channels', c => c.channel_type === 'TELEGRAM' && c.is_active && c.config?.personal === true && !!c.config?.bot_token)) {
+      for (const bot of db.find('notification_channels', c => c.channel_type === 'TELEGRAM' && c.is_active && !!c.config?.bot_token && (c.config?.personal === true || c.config?.checkin_enabled === true || !!c.config?.checkin_chat_id))) {
         await StaffBotService.pollUpdates(bot);
       }
     } catch (err: any) { console.warn('[StaffBot]', err.message); } finally { busy = false; }
   }, 20_000);
   let tick = 0;
+  if (pollingOnly) { poll.unref(); return; }
   const reminders = setInterval(() => {
     try { StaffBotService.queueScheduled(); } catch (err: any) { console.warn('[StaffBot]', err.message); }
     // Violations to the groups every 5 minutes (they are worked out from the month's attendance).

@@ -745,7 +745,8 @@ export class SalesDocAdapter implements IntegrationAdapter {
       const agentRes = await this.executeSalesDocMethod(config, 'getAgent', { limit: 1000 }).catch(() => null);
       const rawAgents = responseRows(agentRes, 'agent');
       for (const a of rawAgents) {
-        const extId = a.SD_id || a.CS_id || a.code_1C || `SD-AG-${Math.random().toString(36).slice(2, 6)}`;
+        const extId = a.SD_id || a.CS_id || a.code_1C;
+        if (extId === undefined || extId === null || String(extId) === '') continue;
         if (!seenIds.has(extId)) {
           seenIds.add(extId);
           employeesList.push({
@@ -836,8 +837,9 @@ export class SalesDocAdapter implements IntegrationAdapter {
           const customerCode = o.client?.SD_id || o.client?.CS_id || o.client?.code_1C || 'UNKNOWN';
           const customerName = o.client?.clientName || o.client?.firmName || o.client?.name || 'Mijoz';
 
-          const agentName = o.agent?.name || '';
-          const agentCode = o.agent?.code_1C || o.agent?.SD_id || o.agent?.CS_id || '';
+          const agent = o.agent && typeof o.agent === 'object' ? o.agent : {};
+          const agentName = agent.name || o.agent_name || '';
+          const agentCode = String(agent.code_1C || agent.SD_id || agent.CS_id || agent.id || o.agent_id || o.agentId || (typeof o.agent === 'string' ? o.agent : '') || '');
           const expeditorName = o.expeditor?.name || '';
 
           // Parse order items for velocity and basket analysis

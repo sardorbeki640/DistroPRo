@@ -164,6 +164,8 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'test' && process.env.DISABLE_BACKUPS !== '1') startBackupScheduler();
   // DISABLE_BOTS=1 for a copy of the database that must not message the real Telegram chats.
   if (process.env.NODE_ENV !== 'test' && process.env.DISABLE_BOTS !== '1') { startBotScheduler(); startStaffBotScheduler(); startSheetsScheduler(); startStrategyScheduler(); JarvisService.startScheduler(); }
+  // Preview-safe inbound polling: consume Telegram updates without sending reminders, penalty posts or bot replies.
+  else if (process.env.NODE_ENV !== 'test' && process.env.ENABLE_TELEGRAM_POLLING === '1') startStaffBotScheduler();
   if (process.env.NODE_ENV !== 'test' && process.env.DISABLE_SCHEDULER !== '1') startAttendanceScheduler();
 
   // Free hosts (Render) put a service to sleep after 15 min without outside traffic. Only a request through the

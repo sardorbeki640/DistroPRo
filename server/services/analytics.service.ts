@@ -1,6 +1,7 @@
 import { db } from '../db/database.ts';
 import { openDebtLots, lotAge, ledgerByCustomer } from './debt-aging.ts';
 import { businessToday } from '../utils/date.ts';
+import { matchesIntegrationSource } from './source-tagging.service.ts';
 import type { 
   SalesOrder, 
   SalesOrderItem, 
@@ -85,12 +86,12 @@ export class AnalyticsService {
   /**
    * Generates Executive Profit & Loss (P&L) Statement
    */
-  public static getProfitAndLoss(company_id: string, fromDate: string, toDate: string, integrationId?: string): ProfitAndLossReport {
+  public static getProfitAndLoss(company_id: string, fromDate: string, toDate: string, integrationId?: string | null): ProfitAndLossReport {
     // 1. Revenue is recognised on delivery. Pending orders are reported separately, cancelled ones ignored.
     const inPeriod = db.find('sales_orders', o =>
       o.company_id === company_id &&
       o.order_date >= fromDate &&
-      o.order_date <= toDate && (!integrationId || o.source_integration_id === integrationId)
+      o.order_date <= toDate && matchesIntegrationSource(o, integrationId)
     );
     const orders = inPeriod.filter(o => o.status === 'DELIVERED');
     const pendingSales = inPeriod.filter(o => o.status === 'PENDING').reduce((s, o) => s + (o.total_sales || 0), 0);
@@ -114,7 +115,7 @@ export class AnalyticsService {
     // Without imported orders, the cash registry still gives revenue — but no cost.
     if (orders.length === 0) {
       const dailyOrders = db.find('daily_order_entries', o =>
-        o.company_id === company_id && o.order_date >= fromDate && o.order_date <= toDate && o.status !== 'CANCELLED' && (!integrationId || o.integration_id === integrationId)
+        o.company_id === company_id && o.order_date >= fromDate && o.order_date <= toDate && o.status !== 'CANCELLED' && (integrationId === undefined || o.integration_id === integrationId || (!o.integration_id && !o.external_order_id && !o.order_ref))
       );
       for (const d of dailyOrders) {
         grossSales += (d.sale_amount || 0);

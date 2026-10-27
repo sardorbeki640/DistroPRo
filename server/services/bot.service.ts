@@ -47,6 +47,11 @@ export class BotService {
         remind_before_min: StaffBotService.settingsOf(c).remind_before_min,
         missed_after_min: StaffBotService.settingsOf(c).missed_after_min,
         morning_hour: StaffBotService.settingsOf(c).morning_hour,
+        checkin_enabled: c.config?.checkin_enabled === true || !!c.config?.checkin_chat_id,
+        poll_error: c.config?.poll_error || null,
+        last_poll_at: c.config?.last_poll_at || null,
+        last_update: c.config?.last_update || null,
+        poller_enabled: (process.env.DISABLE_BOTS !== '1' || process.env.ENABLE_TELEGRAM_POLLING === '1') && process.env.NODE_ENV !== 'test',
         checkin_chat_id: c.config?.checkin_chat_id || '',
         checkin_chat_title: c.config?.checkin_chat_title || '',
         linked_people: c.config?.personal === true ? db.find('staff_telegram', r => r.company_id === company_id && !!r.chat_id && !r.blocked_at).length : 0,
@@ -64,7 +69,7 @@ export class BotService {
   static async save(company_id: string, user: { id: string; email: string }, input: {
     id?: string; name: string; bot_token?: string; chat_id: string; chat_title?: string; topic_id?: string;
     events: string[]; is_active?: boolean; daily_report_hour?: number;
-    personal?: boolean; personal_events?: string[]; remind_before_min?: number; missed_after_min?: number; morning_hour?: number;
+    personal?: boolean; checkin_enabled?: boolean; personal_events?: string[]; remind_before_min?: number; missed_after_min?: number; morning_hour?: number;
     checkin_chat_id?: string; checkin_chat_title?: string;
   }) {
     const existing = input.id ? db.findById('notification_channels', input.id) : null;
@@ -74,14 +79,16 @@ export class BotService {
     const chatId = String(input.chat_id || '').trim();
     const events = input.events.filter(e => EVENT_TYPES.has(e as NotificationEventType)) as NotificationEventType[];
     const personal = input.personal ?? existing?.config?.personal === true;
+    const checkinEnabled = input.checkin_enabled ?? (existing?.config?.checkin_enabled === true || !!(input.checkin_chat_id || existing?.config?.checkin_chat_id));
     // A bot only for employees' personal reminders needs no group chat.
-    if ((chatId || !personal || events.length) && !/^-?\d{3,}$/.test(chatId) && !/^@\w{4,}$/.test(chatId)) {
-      throw new Error(personal && !chatId ? 'Rahbariyat xabarlari tanlangan — ular uchun chat tanlang (yoki belgilarini olib tashlang).' : 'Chat ID raqam (guruhda -100… bilan) yoki @kanal_nomi bo‘lishi kerak. “Chatni topish” tugmasidan foydalaning.');
-    }
+    if (chatId && !/^-?\d{3,}$/.test(chatId) && !/^@\w{4,}$/.test(chatId)) throw new Error('Chat ID raqam (guruhda -100… bilan) yoki @kanal_nomi bo‘lishi kerak. “Chatni topish” tugmasidan foydalaning.');
+    if (events.length && !chatId) throw new Error('Rahbariyat xabarlari tanlangan — ular uchun chat tanlang yoki xabar turlarini olib tashlang.');
+    if (!chatId && !personal && !checkinEnabled && !existing) throw new Error('Bot vazifasini tanlang: rahbariyat xabarlari, shaxsiy eslatmalar yoki davomat guruhlarini o‘qish.');
     const minutes = (v: unknown, fallback: number, max: number) => { const n = Number(v ?? fallback); if (!Number.isInteger(n) || n < 0 || n > max) throw new Error(`Daqiqa 0–${max} oralig‘ida bo‘lsin.`); return n; };
     const prev = StaffBotService.settingsOf(existing);
     const personalCfg = {
       personal,
+      checkin_enabled: checkinEnabled,
       personal_events: (input.personal_events ?? prev.events).filter(t => STAFF_REMINDERS.some(r => r.type === t)),
       remind_before_min: minutes(input.remind_before_min, prev.remind_before_min, 180),
       missed_after_min: minutes(input.missed_after_min, prev.missed_after_min, 240),
@@ -93,7 +100,8 @@ export class BotService {
     if (personalCfg.checkin_chat_id && !/^-\d{5,}$/.test(personalCfg.checkin_chat_id)) throw new Error('Video guruhi Telegram guruhi bo‘lishi kerak (ID -100… bilan). “Chatni topish” bilan tanlang.');
     const hour = Number(input.daily_report_hour ?? existing?.config?.daily_report_hour ?? 20);
     if (!Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error('Kunlik hisobot soati 0–23 oralig‘ida bo‘lsin.');
-    const me = token !== existing?.config?.bot_token || !existing?.config?.bot_username ? await TelegramService.getMe(token) : null;
+    const tokenChanged = token !== existing?.config?.bot_token;
+    const me = tokenChanged || !existing?.config?.bot_username ? await TelegramService.getMe(token) : null;
 
     const now = new Date().toISOString();
     const config = {
@@ -104,7 +112,8 @@ export class BotService {
       chat_title: (input.chat_title || '').trim() || (chatId === existing?.config?.chat_id ? existing?.config?.chat_title : '') || '',
       topic_id: String(input.topic_id || '').trim() || undefined,
       daily_report_hour: hour,
-      ...personalCfg
+      ...personalCfg,
+      ...(tokenChanged ? { update_offset: 0, recent_chats: [], last_poll_at: null, poll_error: null } : {})
     };
     const id = existing?.id || `chan-tg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     db.transaction(() => {
@@ -163,7 +172,12 @@ export class BotService {
     const token = this.tokenFor(company_id, input);
     const c = input.id ? db.findById('notification_channels', input.id) : null;
     const chatId = String(input.chat_id || c?.config?.chat_id || '').trim();
-    if (!chatId) throw new Error('Guruh chati tanlanmagan. Shaxsiy eslatmani tekshirish uchun Kabinet → Telegram eslatmalar orqali o‘zingizni ulang.');
+    if (!chatId) {
+      if (!c?.config?.checkin_enabled && !c?.config?.checkin_chat_id) throw new Error('Guruh chati tanlanmagan. Davomat boti sifatida tekshirish uchun “Davomat videolarini o‘qish”ni yoqing.');
+      const [me, webhook] = await Promise.all([TelegramService.getMe(token), TelegramService.getWebhookInfo(token)]);
+      if (webhook.url) throw new Error(`@${me.username} ishlayapti, ammo webhook yoqilgan (${webhook.url}) — getUpdates orqali video o‘qilmaydi. Bot webhook’ini Telegram’dan o‘chirib, keyin qayta tekshiring.`);
+      return { ok: true, message: `@${me.username} tokeni ishlayapti. Davomat guruhi xabarlarini o‘qish yoqilgan; bot guruhda admin bo‘lsin yoki @BotFather → /setprivacy → Disable qiling.` };
+    }
     const company = db.findById('companies', company_id);
     await TelegramService.send(token, chatId, `✅ <b>Distro Pro</b> bot ulandi.\n${escapeHtml(company?.name || '')} xabarlari shu yerga keladi.`, input.topic_id || c?.config?.topic_id);
     return { ok: true };

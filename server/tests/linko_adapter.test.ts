@@ -42,3 +42,4 @@ test('record shape lists field names and types, never values',()=>{
  assert.deepEqual(shape,['id:number','market.name:string','products[]','products[].price:number','note:null']);
  assert.ok(!shape.join(' ').includes('Secret'));
 });
+

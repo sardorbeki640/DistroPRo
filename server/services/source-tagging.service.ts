@@ -7,6 +7,19 @@ export const isSalesDocId = (code?: string | null) => /^[a-z]\d+_\d+$/i.test(can
 /** Linko ids are stored with an "lk-" prefix (customers lk-<market>, orders lk-<order>, products lk-<product>, agents lk-u<user>). */
 export const isLinkoId = (code?: string | null) => /^lk-/i.test(String(code || ''));
 
+/** A server-scoped view includes local/manual rows but excludes untagged records that still look imported. */
+export function matchesIntegrationSource(row: { source_integration_id?: string | null; source?: string | null; external_id?: string | null; code?: string | null }, integrationId?: string | null) {
+  if (integrationId === null) {
+    const source = String(row.source || '').toUpperCase();
+    return !row.source_integration_id && !['DISTRIBUTION', 'SALESDOC', 'LINKO', 'SMARTUP', '1C', 'EXCEL'].includes(source) && !row.external_id && !isLinkoId(row.code) && !isSalesDocId(row.code);
+  }
+  if (!integrationId) return true;
+  if (row.source_integration_id) return row.source_integration_id === integrationId;
+  const source = String(row.source || '').toUpperCase();
+  const looksImported = ['DISTRIBUTION', 'SALESDOC', 'LINKO', 'SMARTUP', '1C', 'EXCEL'].includes(source);
+  return !looksImported && !row.external_id && !isLinkoId(row.code) && !isSalesDocId(row.code);
+}
+
 /** Tags the rows of whichever distribution system the integration is. */
 export function tagIntegrationRows(integrationId: string): Record<string, number> {
   const integration = db.findById('integrations', integrationId);

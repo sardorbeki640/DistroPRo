@@ -20,6 +20,7 @@ import type {
 } from '../db/schema.ts';
 import { AuditService } from '../services/audit.service.ts';
 import { ForecastService } from '../services/forecast.service.ts';
+import { inventoryObservation } from '../services/inventory-observation.ts';
 import { SalesDocHistoryService } from '../services/salesdoc-history.service.ts';
 import { tagIntegrationRows } from '../services/source-tagging.service.ts';
 import { CustomerBalanceService } from '../services/customer_balance.service.ts';
@@ -150,7 +151,8 @@ export class IntegrationProvider {
         const products = await adapter.importProducts(config);
         for (const p of products) {
           if (!p?.sku) { recordsFailed++; continue; }
-          const existingProd = db.findOne('products', prod => prod.company_id === companyId && prod.sku === String(p.sku));
+          const existingProd = db.findOne('products', prod => prod.company_id === companyId && prod.sku === String(p.sku)
+            && (!integrationRecord || !prod.source_integration_id || prod.source_integration_id === integrationRecord.id));
           const stockQty = Number.isFinite(Number(p.stock_quantity)) ? Number(p.stock_quantity) : 0;
           const cost = Number(p.purchase_cost) > 0 ? Number(p.purchase_cost) : 0;
           if (!existingProd) {
@@ -170,7 +172,10 @@ export class IntegrationProvider {
               daily_sales_avg: 0,
               out_of_stock_days: 0,
               last_in_stock_at: stockQty > 0 ? businessToday() : null,
+              zero_stock_observed_at: null,
+              stock_observed_at: businessToday(),
               source: upperProvider.includes('SALES') ? 'SALESDOC' : '1C',
+              ...(integrationRecord ? { source_integration_id: integrationRecord.id } : {}),
               is_active: true,
               created_at: now
             };
@@ -178,15 +183,16 @@ export class IntegrationProvider {
           } else {
             db.update('products', existingProd.id, {
               stock_quantity: stockQty,
+              ...inventoryObservation(existingProd, stockQty, businessToday()),
               selling_price: Number(p.selling_price) || existingProd.selling_price,
               // A placeholder cost (1 so'm) from the system never erases a real cost entered by hand.
               purchase_cost: isPlausibleCost(cost, Number(p.selling_price) || existingProd.selling_price) || !isPlausibleCost(existingProd.purchase_cost, existingProd.selling_price) ? (cost || existingProd.purchase_cost) : existingProd.purchase_cost,
               current_cost: isPlausibleCost(cost, Number(p.selling_price) || existingProd.selling_price) || !isPlausibleCost(existingProd.current_cost, existingProd.selling_price) ? (cost || existingProd.current_cost) : existingProd.current_cost,
-              ...(stockQty > 0 ? { last_in_stock_at: businessToday() } : {}),
               ...(Array.isArray(p.prices) ? { prices: p.prices } : {}),
               // The system's real category replaces the 'Asosiy' placeholder; a hand-made one stays when it sends none.
               ...(p.category && p.category !== 'Asosiy' ? { category: p.category } : {}),
               ...(p.brand ? { brand: p.brand } : {})
+              , ...(integrationRecord ? { source_integration_id: integrationRecord.id } : {})
             });
           }
           recordsImported++;
@@ -214,7 +220,7 @@ export class IntegrationProvider {
           }
           if (emp.role === 'AGENT' || emp.role === 'SUPERVISOR') {
             const code = emp.code_1C || emp.externalId;
-            const coreAgent = db.findOne('agents', a => a.company_id === companyId && (a.code === code || a.full_name.toLowerCase() === emp.name.toLowerCase()));
+            const coreAgent = db.findOne('agents', a => a.company_id === companyId && (!integrationRecord || !a.source_integration_id || a.source_integration_id === integrationRecord.id) && (a.code === code || a.full_name.toLowerCase() === emp.name.toLowerCase()));
             if (!coreAgent) {
               db.insert('agents', {
                 id: randomUUID(),
@@ -225,6 +231,7 @@ export class IntegrationProvider {
                 phone: emp.phone || coreEmp.phone,
                 commission_rate: emp.commissionRate || 0,
                 status: 'ACTIVE',
+                ...(integrationRecord ? { source_integration_id: integrationRecord.id } : {}),
                 created_at: now
               });
               recordsImported++;
@@ -236,7 +243,7 @@ export class IntegrationProvider {
       // 3. Customers: one external record and one core customer per external code
       const customers = await adapter.importCustomers(config);
       const customerMap = new Map<string, Customer>();
-      for (const c of db.find('customers', c => c.company_id === companyId)) if (c.code) customerMap.set(canonicalCustomerCode(c.code), c);
+      for (const c of db.find('customers', c => c.company_id === companyId && (!integrationRecord || !c.source_integration_id || c.source_integration_id === integrationRecord.id))) if (c.code) customerMap.set(canonicalCustomerCode(c.code), c);
       const extCustomerIndex = new Map(db.find('external_customers', e => e.company_id === companyId && e.integration_id === syncIntegrationId).map(e => [e.external_code, e]));
       for (const cust of customers) {
         if (!cust.externalCode) { recordsFailed++; continue; }
@@ -270,10 +277,11 @@ export class IntegrationProvider {
             status: 'ACTIVE',
             is_active: true,
             created_at: now
+            , ...(integrationRecord ? { source_integration_id: integrationRecord.id } : {})
           });
           customerMap.set(canonicalCustomerCode(cust.externalCode), coreCust);
         } else {
-          db.update('customers', coreCust.id, { name: cust.name || coreCust.name, phone: cust.phone || coreCust.phone, address: cust.address || coreCust.address, territory_id: territory_id || coreCust.territory_id || null });
+          db.update('customers', coreCust.id, { name: cust.name || coreCust.name, phone: cust.phone || coreCust.phone, address: cust.address || coreCust.address, territory_id: territory_id || coreCust.territory_id || null, ...(integrationRecord ? { source_integration_id: integrationRecord.id } : {}) });
         }
         recordsImported++;
       }
@@ -281,7 +289,7 @@ export class IntegrationProvider {
 
       // 4. Orders: upsert by external id; the debt is booked once, when the order is delivered
       const orders = await adapter.importOrders(config);
-      const products = db.find('products', p => p.company_id === companyId);
+      const products = db.find('products', p => p.company_id === companyId && (!integrationRecord || !p.source_integration_id || p.source_integration_id === integrationRecord.id));
       const productBySku = new Map(products.map(p => [p.sku, p]));
       for (const ord of orders) {
         const coreCustomer = findCustomer(ord.customerCode);
@@ -306,7 +314,8 @@ export class IntegrationProvider {
 
         const status: SalesOrder['status'] = ord.status === 'CANCELLED' ? 'CANCELLED' : (ord.status === 'DELIVERED' || ord.status === 'CLOSED') ? 'DELIVERED' : 'PENDING';
         const cogs = computeOrderCogs(ord.items || [], productBySku);
-        const existingOrder = db.findOne('sales_orders', o => o.company_id === companyId && o.external_id === ord.externalId);
+        const existingOrder = db.findOne('sales_orders', o => o.company_id === companyId && o.external_id === ord.externalId
+          && (!integrationRecord || !o.source_integration_id || o.source_integration_id === integrationRecord.id));
         const orderId = existingOrder?.id || randomUUID();
         const values = {
           company_id: companyId,
@@ -326,6 +335,7 @@ export class IntegrationProvider {
           payment_type: 'CREDIT' as const,
           status,
           source: 'DISTRIBUTION' as const,
+          ...(integrationRecord ? { source_integration_id: integrationRecord.id } : {}),
           updated_at: now
         };
         if (existingOrder) db.update('sales_orders', orderId, values);

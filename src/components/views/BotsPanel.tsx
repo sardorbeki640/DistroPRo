@@ -54,8 +54,8 @@ const StaffTelegramList: React.FC<{ onMessage: (m: string) => void; onError: (m:
   );
 };
 
-type Form = { id?: string; name: string; bot_token: string; chat_id: string; chat_title: string; topic_id: string; events: string[]; is_active: boolean; daily_report_hour: number; personal: boolean; personal_events: string[]; remind_before_min: number; missed_after_min: number; morning_hour: number; checkin_chat_id: string; checkin_chat_title: string };
-const empty: Form = { name: '', bot_token: '', chat_id: '', chat_title: '', topic_id: '', events: ['DAILY_REPORT', 'CASH_DAY_CLOSED', 'CASH_CLOSING_DISCREPANCY'], is_active: true, daily_report_hour: 20, personal: false, personal_events: [], remind_before_min: 15, missed_after_min: 30, morning_hour: 8, checkin_chat_id: '', checkin_chat_title: '' };
+type Form = { id?: string; name: string; bot_token: string; chat_id: string; chat_title: string; topic_id: string; events: string[]; is_active: boolean; daily_report_hour: number; personal: boolean; checkin_enabled: boolean; personal_events: string[]; remind_before_min: number; missed_after_min: number; morning_hour: number; checkin_chat_id: string; checkin_chat_title: string };
+const empty: Form = { name: '', bot_token: '', chat_id: '', chat_title: '', topic_id: '', events: ['DAILY_REPORT', 'CASH_DAY_CLOSED', 'CASH_CLOSING_DISCREPANCY'], is_active: true, daily_report_hour: 20, personal: false, checkin_enabled: false, personal_events: [], remind_before_min: 15, missed_after_min: 30, morning_hour: 8, checkin_chat_id: '', checkin_chat_title: '' };
 const input = 'mt-1 w-full rounded-lg border border-neutral-300 px-2.5 py-2 text-xs focus:border-neutral-900 focus:outline-hidden';
 
 /** Telegram bots that get reports and alerts (owner only). */
@@ -81,7 +81,7 @@ export const BotsPanel: React.FC = () => {
 
   const openNew = () => { setForm({ ...empty, personal_events: reminders.map(r => r.type) }); setSavedToken(null); setChats(null); setError(null); setMsg(null); };
   const openEdit = (b: BotView) => {
-    setForm({ id: b.id, name: b.name, bot_token: '', chat_id: b.chat_id, chat_title: b.chat_title, topic_id: b.topic_id || '', events: b.events, is_active: b.is_active, daily_report_hour: b.daily_report_hour, personal: b.personal, personal_events: b.personal_events, remind_before_min: b.remind_before_min, missed_after_min: b.missed_after_min, morning_hour: b.morning_hour, checkin_chat_id: b.checkin_chat_id || '', checkin_chat_title: b.checkin_chat_title || '' });
+    setForm({ id: b.id, name: b.name, bot_token: '', chat_id: b.chat_id, chat_title: b.chat_title, topic_id: b.topic_id || '', events: b.events, is_active: b.is_active, daily_report_hour: b.daily_report_hour, personal: b.personal, checkin_enabled: b.checkin_enabled, personal_events: b.personal_events, remind_before_min: b.remind_before_min, missed_after_min: b.missed_after_min, morning_hour: b.morning_hour, checkin_chat_id: b.checkin_chat_id || '', checkin_chat_title: b.checkin_chat_title || '' });
     setSavedToken(b.token_masked); setChats(null); setError(null); setMsg(null);
   };
 
@@ -93,7 +93,7 @@ export const BotsPanel: React.FC = () => {
   });
   const test = () => run('test', async () => { const r = await api.bots.test({ ...ref(), chat_id: form?.chat_id, topic_id: form?.topic_id || undefined }); setMsg(r.message); });
   const save = () => run('save', async () => {
-    await api.bots.save({ ...form!, bot_token: form!.bot_token || undefined, topic_id: form!.topic_id || undefined });
+    await api.bots.save({ ...form!, events: form!.chat_id ? form!.events : [], bot_token: form!.bot_token || undefined, topic_id: form!.topic_id || undefined });
     setForm(null); setMsg('Bot saqlandi.'); load();
   });
 
@@ -102,7 +102,7 @@ export const BotsPanel: React.FC = () => {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="flex items-center gap-2 text-sm font-bold text-neutral-900"><Bot className="h-4 w-4" />Telegram botlar</h2>
-          <p className="text-xs text-neutral-500">Rahbariyatga: kunlik hisobot, kassa, qarzdorlar, xatolar. Xodimlarga: shaxsiy eslatmalar o‘z lichkasiga.</p>
+          <p className="text-xs text-neutral-500">Botni bir marta ulang; hisobot, xodim eslatmalari va davomatni kerak bo‘lsa alohida yoqing.</p>
         </div>
         <button onClick={openNew} className="inline-flex items-center gap-1.5 rounded-lg bg-neutral-900 px-3 py-2 text-xs font-semibold text-white"><Plus className="h-3.5 w-3.5" />Bot ulash</button>
       </div>
@@ -116,6 +116,9 @@ export const BotsPanel: React.FC = () => {
               <div className="space-y-0.5">
                 <div className="font-semibold text-neutral-900">{b.name} {b.bot_username && <span className="font-normal text-neutral-500">@{b.bot_username}</span>} {!b.is_active && <span className="rounded bg-neutral-100 px-1.5 text-[10px] text-neutral-500">o‘chirilgan</span>}</div>
                 {b.personal && <div className="font-semibold text-blue-700">👤 Xodimlarga shaxsiy eslatmalar · Telegram’ini ulagan: {b.linked_people}</div>}
+                {!b.token_masked && <div className="font-semibold text-amber-800">Bot tokeni bu serverda saqlanmagan yoki ochilmadi. “Sozlash”ni bosib, tokenni qayta kiriting va saqlang.</div>}
+                {b.checkin_enabled && <div className="font-semibold text-violet-700">◉ Davomat guruhlaridan video qabul qilinadi {b.last_poll_at ? `· oxirgi tekshiruv ${new Date(b.last_poll_at).toLocaleString('ru-RU')}` : '· hali tekshiruv bo‘lmagan'}</div>}
+                {b.poll_error && <div className="max-w-xl text-[11px] text-red-700">Telegram davomat o‘qish xatosi: {b.poll_error}</div>}
                 <div className="text-neutral-500">Chat: {b.chat_title || b.chat_id || '—'} · {b.events.length ? b.events.map(e => events.find(x => x.type === e)?.label || e).join(', ') : 'hech narsa tanlanmagan'}{b.events.includes('DAILY_REPORT') ? ` · hisobot soat ${b.daily_report_hour}:00` : ''}</div>
                 <div className="text-[11px] text-neutral-400">Yuborilgan: {b.sent}{b.pending ? ` · navbatda: ${b.pending}` : ''}{b.failed ? ` · xato: ${b.failed}` : ''}{b.last_sent_at ? ` · oxirgisi ${new Date(b.last_sent_at).toLocaleString('ru-RU')}` : ''}</div>
                 {b.last_error && <div className="text-[11px] text-red-600">Oxirgi xato: {b.last_error}</div>}
@@ -154,7 +157,7 @@ export const BotsPanel: React.FC = () => {
               <SecretInput className={input} value={form.bot_token} onChange={e => setForm({ ...form, bot_token: e.target.value })} placeholder={savedToken ? `Saqlangan: ${savedToken} (o‘zgartirish uchun yangisini kiriting)` : '123456789:AA…'} />
             </label>
             <div className="flex items-end gap-2">
-              <label className="block flex-1 text-xs font-semibold text-neutral-700">Chat
+              <label className="block flex-1 text-xs font-semibold text-neutral-700">Hisobot yuboriladigan chat (davomat botiga shart emas)
                 {chats && chats.length > 0 ? (
                   <select className={input} value={form.chat_id} onChange={e => { const c = chats.find(x => x.id === e.target.value); setForm({ ...form, chat_id: e.target.value, chat_title: c?.title || '' }); }}>
                     <option value="">Tanlang…</option>
@@ -197,6 +200,11 @@ export const BotsPanel: React.FC = () => {
                 <input type="checkbox" className="mt-0.5" checked={form.personal} onChange={e => setForm({ ...form, personal: e.target.checked })} />
                 <span><b>Xodimlarga shaxsiy eslatmalar shu bot orqali</b> <span className="text-neutral-500">— har bir xodim botni o‘z havolasi bilan ochadi va eslatmalar uning lichkasiga keladi. Bu holda rahbariyat chati shart emas.</span></span>
               </label>
+              <label className="flex items-start gap-2 text-xs">
+                <input type="checkbox" className="mt-0.5" checked={form.checkin_enabled} onChange={e => setForm({ ...form, checkin_enabled: e.target.checked })} />
+                <span><b>Davomat videolarini guruhlardan o‘qish</b> <span className="text-neutral-500">— bot xodimlarning guruhlarini shaxsiy eslatmalardan mustaqil ravishda tinglaydi.</span></span>
+              </label>
+              {form.checkin_enabled && <p className="ml-5 text-[11px] text-neutral-500">Har bir guruh ID si Davomat → Sozlamalar ichida xodimga yoki ish guruhiga biriktiriladi. Bot guruhda admin bo‘lsin yoki @BotFather → /setprivacy → Disable qiling.</p>}
               {form.personal && (
                 <div className="ml-5 space-y-1.5">
                   {reminders.map(r => (
@@ -205,14 +213,7 @@ export const BotsPanel: React.FC = () => {
                       <span><b>{r.label}</b> <span className="text-neutral-500">— {r.hint}</span></span>
                     </label>
                   ))}
-                  <label className="block pt-1 text-[11px] font-semibold text-neutral-700">Dostavchiklar dumaloq video tashlaydigan guruh (ixtiyoriy)
-                    <select className={input} value={form.checkin_chat_id} onChange={e => { const c = chats?.find(x => x.id === e.target.value); setForm({ ...form, checkin_chat_id: e.target.value, checkin_chat_title: c?.title || (e.target.value === form.checkin_chat_id ? form.checkin_chat_title : '') }); }}>
-                      <option value="">— yo‘q —</option>
-                      {form.checkin_chat_id && !chats?.some(c => c.id === form.checkin_chat_id) && <option value={form.checkin_chat_id}>{form.checkin_chat_title || form.checkin_chat_id}</option>}
-                      {(chats || []).filter(c => c.type === 'group' || c.type === 'supergroup').map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
-                    </select>
-                    <span className="mt-1 block font-normal text-neutral-500">Guruh ro‘yxatda bo‘lmasa: botni guruhga qo‘shing, guruhda biror narsa yozing va “Chatni topish”ni bosing. Bot guruhdagi videolarni ko‘rishi uchun uni guruhda <b>admin</b> qiling (yoki @BotFather → /setprivacy → Disable). Video yuborilgan vaqt — ish boshlagan vaqt; usul “Davomat → Qoidalar va sozlamalar”da har bir xodimga tanlanadi. Xodim botga ulanmasa ham bo‘ladi: “Davomat → Sozlamalar → Xodimlarning Telegram hisoblari”da uning Telegram’ini biriktiring.</span>
-                  </label>
+                  <p className="text-[11px] text-neutral-500">Xodimning Telegram ID sini Davomat → Sozlamalar → Xodimlarning Telegram hisoblari bo‘limida biriktiring.</p>
                   <div className="grid grid-cols-3 gap-2 pt-1">
                     <label className="text-[11px] font-semibold text-neutral-700">Startdan necha daqiqa oldin eslatilsin
                       <input type="number" min={0} max={180} className={input} value={form.remind_before_min} onChange={e => setForm({ ...form, remind_before_min: Number(e.target.value) })} />
@@ -231,11 +232,11 @@ export const BotsPanel: React.FC = () => {
             </div>
             <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.is_active} onChange={e => setForm({ ...form, is_active: e.target.checked })} />Yoqilgan</label>
             <div className="flex flex-wrap justify-end gap-2 border-t border-neutral-100 pt-3">
-              <button type="button" onClick={test} disabled={!!busy || !form.chat_id || (!form.bot_token && !form.id)} className="mr-auto inline-flex items-center gap-1 rounded-lg border border-neutral-300 px-3 py-2 text-xs font-semibold hover:bg-neutral-50 disabled:opacity-50">
+              <button type="button" onClick={test} disabled={!!busy || (!form.chat_id && !form.checkin_enabled) || (!form.bot_token && !form.id)} className="mr-auto inline-flex items-center gap-1 rounded-lg border border-neutral-300 px-3 py-2 text-xs font-semibold hover:bg-neutral-50 disabled:opacity-50">
                 {busy === 'test' ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}Sinov xabari
               </button>
               <button type="button" onClick={() => setForm(null)} className="rounded-lg px-3 py-2 text-xs font-semibold text-neutral-600 hover:bg-neutral-100">Bekor qilish</button>
-              <button type="button" onClick={save} disabled={!!busy || (!form.chat_id && !form.personal) || (!form.bot_token && !form.id)} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
+              <button type="button" onClick={save} disabled={!!busy || (!form.chat_id && !form.personal && !form.checkin_enabled) || (!form.bot_token && !form.id)} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
                 {busy === 'save' ? 'Saqlanmoqda…' : 'Saqlash'}
               </button>
             </div>

@@ -6,6 +6,8 @@ import { db } from '../db/database.ts';
 import { CashService } from '../services/cash.service.ts';
 import { ForecastService } from '../services/forecast.service.ts';
 import { AnalyticsService } from '../services/analytics.service.ts';
+import { activeDistribution } from '../integrations/distribution.ts';
+import { isLinkoId, isSalesDocId, matchesIntegrationSource } from '../services/source-tagging.service.ts';
 
 const router = Router();
 
@@ -14,6 +16,11 @@ router.get('/stats', requireAuth, requirePermission('reports', 'view'), (req: Re
   try {
     const companyId = req.user!.companyId;
     const today = businessToday();
+    const integrationId = activeDistribution(companyId)?.integration.id;
+    const sourceMatches = (row: { source_integration_id?: string | null; source?: string | null; external_id?: string | null; code?: string | null }) => {
+      if (!integrationId) return row.source !== 'DISTRIBUTION' && !row.source_integration_id && !row.external_id && !isLinkoId(row.code) && !isSalesDocId(row.code);
+      return matchesIntegrationSource(row, integrationId);
+    };
 
     const company = db.findById('companies', companyId);
     const activeRegister = db.findOne('cash_registers', r => r.company_id === companyId);
@@ -21,12 +28,12 @@ router.get('/stats', requireAuth, requirePermission('reports', 'view'), (req: Re
     const transactions = currentCashDay ? CashService.getDayTransactions(currentCashDay.id) : [];
 
     // Daily sales and profit by the same rules as the P&L report: no percentage guess for unknown cost.
-    const salesOrders = db.find('sales_orders', o => o.company_id === companyId && o.order_date === today && o.status !== 'CANCELLED');
+    const salesOrders = db.find('sales_orders', o => o.company_id === companyId && sourceMatches(o) && o.order_date === today && o.status !== 'CANCELLED');
     let grossSales = salesOrders.reduce((sum, o) => sum + o.total_sales, 0);
     if (grossSales === 0 && currentCashDay) {
       grossSales = (currentCashDay.cash_payment || 0) + (currentCashDay.terminal_payment || 0) + (currentCashDay.click_payment || 0) + (currentCashDay.credit_sale || 0);
     }
-    const pnl = AnalyticsService.getProfitAndLoss(companyId, today, today);
+    const pnl = AnalyticsService.getProfitAndLoss(companyId, today, today, integrationId || null);
 
     const todayExpenses = db.find('expenses', e => e.company_id === companyId && e.status === 'CONFIRMED' && e.date === today);
     const totalExpenses = todayExpenses.reduce((sum, e) => sum + e.amount, 0);
@@ -39,7 +46,7 @@ router.get('/stats', requireAuth, requirePermission('reports', 'view'), (req: Re
     const stockRunRate = ForecastService.getStockRunRate(companyId, 1.0);
     const stockOutAnalysis = ForecastService.getOutOfStockLostProfit(companyId);
 
-    const customers = db.find('customers', c => c.company_id === companyId);
+    const customers = db.find('customers', c => c.company_id === companyId && sourceMatches(c));
     const totalCustomerDebt = customers.reduce((acc, c) => acc + (c.current_balance > 0 ? c.current_balance : 0), 0);
     const totalCreditLimit = customers.reduce((acc, c) => acc + c.credit_limit, 0);
     // Over the credit limit, only where a limit is actually set.

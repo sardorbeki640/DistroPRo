@@ -64,6 +64,7 @@ const BotSchema = z.object({
   is_active: z.boolean().optional(),
   daily_report_hour: z.number().int().min(0).max(23).optional(),
   personal: z.boolean().optional(),
+  checkin_enabled: z.boolean().optional(),
   personal_events: z.array(z.string()).max(20).optional(),
   remind_before_min: z.number().int().min(0).max(180).optional(),
   missed_after_min: z.number().int().min(0).max(240).optional(),
@@ -109,7 +110,7 @@ router.post('/bots/find-chats', async (req, res, next) => {
   try { res.json({ success: true, ...(await BotService.findChats(req.user!.companyId, BotRefSchema.parse(req.body))) }); } catch (e) { next(e); }
 });
 router.post('/bots/test', async (req, res, next) => {
-  try { await BotService.test(req.user!.companyId, BotRefSchema.parse(req.body)); res.json({ success: true, message: 'Sinov xabari yuborildi — Telegram’ni tekshiring.' }); } catch (e) { next(e); }
+  try { const result = await BotService.test(req.user!.companyId, BotRefSchema.parse(req.body)); res.json({ success: true, message: result.message || 'Sinov xabari yuborildi — Telegram’ni tekshiring.' }); } catch (e) { next(e); }
 });
 /** Sends today's report to one bot now (preview of what it gets every day). */
 router.post('/bots/:id/report-now', async (req, res, next) => {

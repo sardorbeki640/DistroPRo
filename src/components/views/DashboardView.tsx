@@ -90,8 +90,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   };
 
   useEffect(() => {
-    loadForecastAndAI(runRateFactor);
-  }, [runRateFactor]);
+    if (!distribution.loaded) return;
+    let current = true;
+    setRunRateData(null);
+    setOutOfStockData(null);
+    setAiAnalysis(null);
+    setLoadingForecast(true);
+    Promise.all([
+      api.getForecastRunRate(runRateFactor).catch(() => null),
+      api.getOutOfStockLostProfit().catch(() => null),
+      api.getAIAnalysis().catch(() => null)
+    ]).then(([rrRes, outRes, aiRes]) => {
+      if (!current) return;
+      if (rrRes) setRunRateData(rrRes);
+      if (outRes) setOutOfStockData(outRes);
+      if (aiRes?.analysis) setAiAnalysis(aiRes.analysis);
+    }).finally(() => { if (current) setLoadingForecast(false); });
+    return () => { current = false; };
+  }, [runRateFactor, distribution.loaded, distribution.system?.id]);
 
   const handleSyncAll = async () => {
     setSyncing(true);
@@ -687,7 +703,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <label className="block text-neutral-600 font-bold mb-1">Xabar matni:</label>
                 <div className="rounded-xl bg-neutral-50 p-3 border border-neutral-200 text-neutral-800 font-mono text-[11px] leading-relaxed whitespace-pre-line max-h-48 overflow-y-auto">
                   {`Omborda ${inventorySummary.out_of_stock_count} ta tovar tugagan.\n` +
-                   [...stockOutItems].sort((a: any, b: any) => b.lost_sales_uzs - a.lost_sales_uzs).slice(0, 5).map((it: any) => `• ${it.name}: ${stockOutLabel(it)} yo'q, boy berilgan savdo ${formatUZS(it.lost_sales_uzs)}`).join('\n') +
+                   [...stockOutItems].sort((a: any, b: any) => b.lost_sales_uzs - a.lost_sales_uzs).slice(0, 5).map((it: any) => `• ${it.name}: ${stockOutLabel(it)}, taxminiy boy berilgan savdo ${formatUZS(it.lost_sales_uzs)}`).join('\n') +
                    `\n\nBoy berilgan foyda: ${outOfStockData?.summary?.profit_unknown_count ? `hisoblanmadi (${outOfStockData.summary.profit_unknown_count} ta tovarda kirim narxi yo‘q)` : formatUZS(totalLostProfit)}.\n` +
                    `Ta’minotchiga buyurtma bering.`}
                 </div>

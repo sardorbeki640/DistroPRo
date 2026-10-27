@@ -4,6 +4,8 @@ import { ForecastService } from './forecast.service.ts';
 import { CashService } from './cash.service.ts';
 import { AnalyticsService } from './analytics.service.ts';
 import { addDays, businessToday } from '../utils/date.ts';
+import { activeDistribution } from '../integrations/distribution.ts';
+import { matchesIntegrationSource } from './source-tagging.service.ts';
 
 // Profit is null when the cost of some sales is unknown; say so instead of printing a guessed number.
 const fmtProfit = (value: number | null, margin?: number | null) =>
@@ -32,6 +34,7 @@ export interface AIAnalysisResult {
     out_of_stock_count: number;
     total_lost_profit_uzs: number;
     total_lost_sales_uzs: number;
+    estimate_unknown_count: number;
     avg_inventory_days: number;
     total_customer_debt: number;
   };
@@ -70,15 +73,17 @@ export class AIService {
 
     // 1. Integration Status
     const integrations = db.find('integrations', i => i.company_id === companyId);
-    const activeIntegration = integrations.find(i => i.status === 'CONNECTED') || integrations[0] || null;
-    const extOrdersCount = db.find('external_orders', o => o.company_id === companyId).length;
-    const extCustomersCount = db.find('external_customers', c => c.company_id === companyId).length;
-    const extPaymentsCount = db.find('external_payments', p => p.company_id === companyId).length;
+    const activeIntegration = activeDistribution(companyId)?.integration || null;
+    const integrationId = activeIntegration?.id;
+    const sourceScopeId = integrationId || null;
+    const extOrdersCount = db.find('external_orders', o => o.company_id === companyId && !!integrationId && o.integration_id === integrationId).length;
+    const extCustomersCount = db.find('external_customers', c => c.company_id === companyId && !!integrationId && c.integration_id === integrationId).length;
+    const extPaymentsCount = db.find('external_payments', p => p.company_id === companyId && !!integrationId && p.integration_id === integrationId).length;
 
     // 2. Staff, Agents and Agent Performance
     const employees = db.find('employees', e => e.company_id === companyId && e.status === 'ACTIVE');
     const agents = db.find('agents', a => a.company_id === companyId && a.status === 'ACTIVE');
-    const allOrders = db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED');
+    const allOrders = db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && matchesIntegrationSource(o, sourceScopeId));
 
     const agentPerfMap = new Map<string, { name: string; sales: number; ordersCount: number }>();
     for (const a of agents) {
@@ -99,7 +104,7 @@ export class AIService {
       .slice(0, 5);
 
     // 3. Customers & Receivables (Nasiyalar)
-    const customers = db.find('customers', c => c.company_id === companyId);
+    const customers = db.find('customers', c => c.company_id === companyId && matchesIntegrationSource(c, sourceScopeId));
     let totalCustomerDebt = 0;
     let overdueCount = 0;
     for (const c of customers) {
@@ -126,7 +131,7 @@ export class AIService {
     // 4. Products, Inventory & Stock Run Rate
     const stockRunRate = ForecastService.getStockRunRate(companyId, 1.0);
     const stockOutAnalysis = ForecastService.getOutOfStockLostProfit(companyId);
-    const allProducts = db.find('products', p => p.company_id === companyId && p.is_active);
+    const allProducts = db.find('products', p => p.company_id === companyId && p.is_active && matchesIntegrationSource(p, sourceScopeId));
 
     // Top selling products by historical volume
     const topProducts = allProducts
@@ -168,7 +173,7 @@ export class AIService {
 
     const todaySales = cashDay?.total_sales || (deliveredSales + pendingDeliverySales);
     // Same rules as the P&L report: delivered sales, real product cost, no percentage guess.
-    const todayPnl = AnalyticsService.getProfitAndLoss(companyId, today, today);
+    const todayPnl = AnalyticsService.getProfitAndLoss(companyId, today, today, sourceScopeId);
     const todayGrossProfit = todayPnl.cogs_complete ? todayPnl.gross_profit : null;
     const todayNetProfit = todayGrossProfit === null ? null : todayGrossProfit - totalExpenses;
     const netMarginPct = todayNetProfit !== null && todayPnl.net_revenue > 0 ? Number(((todayNetProfit / todayPnl.net_revenue) * 100).toFixed(1)) : null;
@@ -205,6 +210,7 @@ export class AIService {
         out_of_stock_count: stockOutAnalysis.summary.out_of_stock_count,
         total_lost_profit_uzs: stockOutAnalysis.summary.total_lost_profit_uzs,
         total_lost_sales_uzs: stockOutAnalysis.summary.total_lost_sales_uzs,
+        estimate_unknown_count: stockOutAnalysis.summary.estimate_unknown_count,
         out_of_stock_items: stockOutAnalysis.items,
         top_selling_products: topProducts
       },
@@ -250,7 +256,8 @@ export class AIService {
       stockout_summary: {
         out_of_stock_count: profile.inventory.out_of_stock_count,
         total_lost_profit_uzs: profile.inventory.total_lost_profit_uzs,
-        total_lost_sales_uzs: profile.inventory.total_lost_sales_uzs
+        total_lost_sales_uzs: profile.inventory.total_lost_sales_uzs,
+        estimate_unknown_count: profile.inventory.estimate_unknown_count
       },
       out_of_stock_items: profile.inventory.out_of_stock_items,
       total_customer_debt: profile.customers_and_debt.total_debt_uzs,
@@ -278,6 +285,7 @@ export class AIService {
       out_of_stock_count: ctx.stockout_summary.out_of_stock_count,
       total_lost_profit_uzs: ctx.stockout_summary.total_lost_profit_uzs,
       total_lost_sales_uzs: ctx.stockout_summary.total_lost_sales_uzs,
+      estimate_unknown_count: ctx.stockout_summary.estimate_unknown_count,
       avg_inventory_days: ctx.stock_summary.avg_days_remaining,
       total_customer_debt: ctx.total_customer_debt
     };
@@ -294,10 +302,11 @@ Kompaniyaning bugungi haqiqiy moliyaviy va ombor ko'rsatkichlari quyidagicha:
 - Kassadagi naqd qoldiq: ${ctx.cash_in_hand.toLocaleString()} UZS
 - Ombordagi tovarlar o'rtacha necha kunga yetishi: ${ctx.stock_summary.avg_days_remaining} kun
 - Tugagan mahsulotlar soni: ${ctx.stockout_summary.out_of_stock_count} ta
-- Tugagan tovarlar tufayli BOY BERILGAN SOF FOYDA: ${ctx.stockout_summary.total_lost_profit_uzs.toLocaleString()} UZS
-- Tugagan tovarlar tufayli BOY BERILGAN SAVDO: ${ctx.stockout_summary.total_lost_sales_uzs.toLocaleString()} UZS
+- Mavjud ma’lumotga ko‘ra TAXMINIY boy berilgan sof foyda: ${ctx.stockout_summary.total_lost_profit_uzs.toLocaleString()} UZS
+- Mavjud ma’lumotga ko‘ra TAXMINIY boy berilgan savdo: ${ctx.stockout_summary.total_lost_sales_uzs.toLocaleString()} UZS
+- Sana yoki talab tarixi yetarli bo‘lmagani uchun hisoblanmagan mahsulotlar: ${ctx.stockout_summary.estimate_unknown_count} ta. Ularni nol yo‘qotish deb talqin qilmang.
 - Tugagan tovarlar ro'yxati:
-${ctx.out_of_stock_items.map(i => `  * ${i.name}: ${i.days_out_of_stock === null ? 'qachondan beri yo‘qligi noma’lum' : `${i.days_out_of_stock} kundan beri yo'q`}, boy berilgan foyda: ${i.lost_profit_uzs.toLocaleString()} UZS`).join('\n')}
+${ctx.out_of_stock_items.map(i => `  * ${i.name}: ${i.days_out_of_stock === null ? '0 qoldiq sanasi tasdiqlanmagan' : `0 qoldiq ${i.days_out_of_stock} kun oldin tasdiqlangan`}, ${i.estimate_status === 'ESTIMATED' ? `taxminiy savdo yo‘qotishi ${i.lost_sales_uzs.toLocaleString()} UZS` : 'yo‘qotish hisoblanmagan — ma’lumot yetarli emas'}`).join('\n')}
 - Mijozlar qarzdorligi (Nasiyalar): ${ctx.total_customer_debt.toLocaleString()} UZS (Limitdan oshgan: ${ctx.overdue_debtors_count} ta)
 
 Iltimos, o'zbek tilida professional, lo'nda va amaliy tahlil taqdim eting.

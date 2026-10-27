@@ -10,6 +10,7 @@ import { tagIntegrationRows } from './source-tagging.service.ts';
 export type HistoryAdapter = SalesDocAdapter | LinkoAdapter;
 import { ForecastService } from './forecast.service.ts';
 import { canonicalCustomerCode, computeOrderCogs, isPlausibleCost } from './cogs.ts';
+import { inventoryObservation } from './inventory-observation.ts';
 import { addDays, businessToday, isValidIsoDate } from '../utils/date.ts';
 import { NotificationService } from './notification.service.ts';
 import { escapeHtml } from './telegram.service.ts';
@@ -37,6 +38,7 @@ export interface HistoryState {
   errors: string[];
   chunks: Record<string, HistoryChunk>;
   refetch_all?: boolean;       // re-download settled months on the next full run
+  agent_mapping_version?: number;
   ledger_synced_to?: string | null; // Linko: customer ledger loaded up to this date (next runs re-read the last week)
   ledger_rows?: number;
 }
@@ -50,6 +52,7 @@ const OLDEST_MONTH = '2010-01';
 const monthKey = (date: string) => date.slice(0, 7);
 // Raise when customer cards must be read again right away (e.g. the territory field changed).
 const CARDS_VERSION = 2;
+const AGENT_MAPPING_VERSION = 1;
 const monthStart = (key: string) => `${key}-01`;
 function monthEnd(key: string): string {
   const [y, m] = key.split('-').map(Number);
@@ -103,13 +106,15 @@ export class SalesDocHistoryService {
     const integration = db.findById('integrations', integrationId);
     if (!integration || integration.company_id !== companyId) { this.running.delete(integrationId); throw new Error('Integratsiya topilmadi'); }
     const previous = (integration.config.history || {}) as Partial<HistoryState> & { refetch_all?: boolean };
+    const runMode = adapter instanceof SalesDocAdapter && previous.agent_mapping_version !== AGENT_MAPPING_VERSION ? 'full' : mode;
     // Set by a migration when stored months must be downloaded again (e.g. a new field); cleared after a full run.
-    const refetchAll = !!previous.refetch_all && mode === 'full';
+    const refetchAll = (!!previous.refetch_all || (adapter instanceof SalesDocAdapter && previous.agent_mapping_version !== AGENT_MAPPING_VERSION)) && runMode === 'full';
     const state: HistoryState = {
-      status: 'RUNNING', mode, complete: false, start: previous.start || null, from: previous.from || null, to: previous.to || null,
+      status: 'RUNNING', mode: runMode, complete: false, start: previous.start || null, from: previous.from || null, to: previous.to || null,
       first_order: previous.first_order || null, orders: previous.orders || 0, skipped: 0,
       months_total: 0, months_done: 0, current: null, started_at: new Date().toISOString(), synced_at: previous.synced_at || null,
-      error: null, errors: [], chunks: { ...(previous.chunks || {}) }, refetch_all: !!previous.refetch_all
+      error: null, errors: [], chunks: { ...(previous.chunks || {}) }, refetch_all: refetchAll,
+      agent_mapping_version: previous.agent_mapping_version
     };
     const save = () => {
       const current = db.findById('integrations', integrationId)!;
@@ -124,11 +129,16 @@ export class SalesDocHistoryService {
       await this.importProducts(companyId, integrationId, adapter, config);
       this.checkStop(integrationId);
       if (adapter instanceof LinkoAdapter) await this.importLinkoDirectory(companyId, integrationId, adapter, config);
+      if (adapter instanceof SalesDocAdapter) {
+        state.current = 'agentlar';
+        save();
+        await this.importSalesDocAgents(companyId, integrationId, adapter, config);
+      }
       this.checkStop(integrationId);
 
       const configuredStart = isValidIsoDate(config.history_start_date) ? config.history_start_date as string : null;
       const stopMonth = configuredStart ? monthKey(configuredStart)
-        : mode === 'recent' ? monthKey(addDays(today, -62)) : OLDEST_MONTH;
+        : runMode === 'recent' ? monthKey(addDays(today, -62)) : OLDEST_MONTH;
       const settledBefore = addDays(today, -SETTLED_AFTER_DAYS);
       state.months_total = Math.max(1, monthDiff(stopMonth, monthKey(today)) + 1);
 
@@ -149,7 +159,7 @@ export class SalesDocHistoryService {
           const orders = await this.fetchRange(adapter, config, from, to, !isLinko);
           // Switched off while this month was downloading: it is not stored.
           this.checkStop(integrationId);
-          const { stored, skipped } = this.storeOrders(companyId, userId, orders, state.errors, integrationId, isLinko);
+          const { stored, skipped } = this.storeOrders(companyId, userId, orders, state.errors, integrationId, true);
           state.chunks[month] = { from, to, orders: stored, skipped, synced_at: new Date().toISOString() };
           state.skipped += skipped;
           emptyStreak = stored ? 0 : emptyStreak + 1;
@@ -157,12 +167,12 @@ export class SalesDocHistoryService {
         }
         state.months_done++;
         save();
-        if (!configuredStart && mode === 'full' && emptyStreak >= EMPTY_MONTHS_TO_STOP) break;
+        if (!configuredStart && runMode === 'full' && emptyStreak >= EMPTY_MONTHS_TO_STOP) break;
         month = previousMonth(month);
       }
       // The start is known only after a full search (or when configured); a recent-only run keeps the previous one.
       if (configuredStart) state.start = configuredStart;
-      else if (mode === 'full') state.start = earliestWithOrders ? monthStart(earliestWithOrders) : today;
+      else if (runMode === 'full') state.start = earliestWithOrders ? monthStart(earliestWithOrders) : today;
 
       this.checkStop(integrationId);
       // Customer cards (territory, phone, address) from the client directory, once a day; orders alone do not carry them.
@@ -177,7 +187,10 @@ export class SalesDocHistoryService {
       // Settled months are not downloaded again, so costs entered later must reach them locally.
       this.recomputeCogs(companyId);
       this.finish(companyId, state, today, integrationId);
-      if (mode === 'full') state.refetch_all = false;
+      if (runMode === 'full') {
+        state.refetch_all = false;
+        if (adapter instanceof SalesDocAdapter) state.agent_mapping_version = AGENT_MAPPING_VERSION;
+      }
       state.status = state.complete ? 'COMPLETE' : 'PARTIAL';
       state.synced_at = new Date().toISOString();
       state.current = null;
@@ -240,7 +253,7 @@ export class SalesDocHistoryService {
     const now = new Date().toISOString();
     db.transaction(() => {
       const liveCodes = new Set(products.map(p => String(p.sku)));
-      const existing = db.find('products', p => p.company_id === companyId);
+      const existing = db.find('products', p => p.company_id === companyId && (!p.source_integration_id || p.source_integration_id === integrationId));
       const bySku = new Map(existing.map(p => [p.sku, p]));
       const rows: Product[] = [];
       for (const p of existing) {
@@ -252,6 +265,8 @@ export class SalesDocHistoryService {
         rows.push({
           ...(old || { id: randomUUID(), created_at: now, selling_price: 0, stock_quantity: 0 }),
           ...p,
+          // A later sync may omit the detailed price list; keep the last imported list in that case.
+          prices: p.prices ?? old?.prices,
           // Category and brand come from the distribution system; a hand-made category is kept when it sends none.
           category: p.category || old?.category || 'Asosiy',
           brand: p.brand || old?.brand,
@@ -261,7 +276,8 @@ export class SalesDocHistoryService {
           purchase_cost: isPlausibleCost(p.purchase_cost, price) ? p.purchase_cost : (old && isPlausibleCost(old.purchase_cost, price) ? old.purchase_cost : p.purchase_cost || 0),
           current_cost: isPlausibleCost(p.purchase_cost, price) ? p.purchase_cost : (old && isPlausibleCost(old.current_cost, price) ? old.current_cost : p.purchase_cost || 0),
           daily_sales_avg: old?.daily_sales_avg ?? 0,
-          // When stock was last seen: with the last sale it dates a stock-out (ForecastService.outOfStockSince).
+          ...inventoryObservation(old || { stock_quantity: 0 }, Number(p.stock_quantity) || 0, businessToday()),
+          // Keep the last positive inventory sighting; it is evidence of availability, not an exact depletion date.
           last_in_stock_at: Number(p.stock_quantity) > 0 ? businessToday() : old?.last_in_stock_at ?? null,
           sku: String(p.sku), company_id: companyId, source, is_active: true, updated_at: now, source_integration_id: integrationId
         } as Product);
@@ -282,7 +298,7 @@ export class SalesDocHistoryService {
     if (cfg.customers_cards_version === CARDS_VERSION && now - last < 20 * 3600_000) return { updated: 0, skipped: true };
     let cards;
     try { cards = await adapter.importCustomers(config); } catch (err: any) { console.warn('[SalesDocHistory] mijozlar kartasi:', err.message); return { updated: 0, skipped: false }; }
-    const byCode = new Map(db.find('customers', c => c.company_id === companyId && !!c.code).map(c => [canonicalCustomerCode(c.code), c]));
+    const byCode = new Map(db.find('customers', c => c.company_id === companyId && !!c.code && (!c.source_integration_id || c.source_integration_id === integrationId)).map(c => [canonicalCustomerCode(c.code), c]));
     let updated = 0;
     for (const card of cards) {
       const c = byCode.get(canonicalCustomerCode(card.externalCode));
@@ -304,7 +320,7 @@ export class SalesDocHistoryService {
     const [markets, staff] = await Promise.all([adapter.importCustomers(config), adapter.importEmployees(config)]);
     const now = new Date().toISOString();
     db.transaction(() => {
-      const agents = new Map(db.find('agents', a => a.company_id === companyId && !!a.code).map(a => [String(a.code), a]));
+      const agents = new Map(db.find('agents', a => a.company_id === companyId && !!a.code && (!a.source_integration_id || a.source_integration_id === integrationId)).map(a => [String(a.code), a]));
       const agentRows: Agent[] = [];
       for (const s of staff) {
         if (s.role !== 'AGENT' && s.role !== 'SUPERVISOR') continue;
@@ -321,7 +337,7 @@ export class SalesDocHistoryService {
         }
       }
       if (agentRows.length) db.upsertMany('agents', agentRows);
-      const customers = new Map(db.find('customers', c => c.company_id === companyId && !!c.code).map(c => [c.code, c]));
+      const customers = new Map(db.find('customers', c => c.company_id === companyId && !!c.code && (!c.source_integration_id || c.source_integration_id === integrationId)).map(c => [c.code, c]));
       const rows: Customer[] = markets.map(m => {
         const old = customers.get(m.externalCode);
         return {
@@ -335,6 +351,58 @@ export class SalesDocHistoryService {
     });
   }
 
+  /** SalesDoctor's order history uses agent ids, so import all ids before linking historical orders. */
+  private static async importSalesDocAgents(companyId: string, integrationId: string, adapter: SalesDocAdapter, config: Record<string, any>) {
+    const staff = await adapter.importEmployees(config);
+    const agents = db.find('agents', a => a.company_id === companyId && (!a.source_integration_id || a.source_integration_id === integrationId));
+    const byCode = new Map<string, Agent>();
+    const byName = new Map<string, Agent[]>();
+    const nameKey = (value: string) => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+    for (const agent of agents) {
+      for (const code of [agent.code, ...(agent.external_codes || [])].filter(Boolean)) byCode.set(String(code), agent);
+      const key = nameKey(agent.full_name);
+      const rows = byName.get(key) || [];
+      rows.push(agent); byName.set(key, rows);
+    }
+    const now = new Date().toISOString();
+    const rows: Agent[] = [];
+    for (const person of staff) {
+      if (person.role !== 'AGENT' && person.role !== 'SUPERVISOR') continue;
+      const codes = [...new Set([person.externalId, person.code_1C].filter((v): v is string => !!v).map(String))];
+      if (!codes.length) continue;
+      const existing = codes.map(code => byCode.get(code)).find(Boolean)
+        || ((byName.get(nameKey(person.name)) || []).length === 1 ? byName.get(nameKey(person.name))![0] : undefined);
+      const canonicalCode = String(person.code_1C || person.externalId);
+      const agent: Agent = {
+        ...(existing || { id: randomUUID(), company_id: companyId, commission_rate: person.commissionRate || 0, created_at: now }),
+        code: existing?.code || canonicalCode,
+        external_codes: [...new Set([...(existing?.external_codes || []), existing?.code, ...codes].filter((v): v is string => !!v))],
+        full_name: person.name || existing?.full_name || canonicalCode,
+        phone: person.phone || existing?.phone || '',
+        status: 'ACTIVE', source_integration_id: integrationId
+      } as Agent;
+      rows.push(agent);
+      for (const code of agent.external_codes || []) byCode.set(code, agent);
+      byCode.set(agent.code, agent);
+      const key = nameKey(agent.full_name);
+      byName.set(key, [...(byName.get(key) || []).filter(a => a.id !== agent.id), agent]);
+    }
+    if (rows.length) db.upsertMany('agents', rows);
+
+    // Previous full-history chunks did not preserve the provider's agent id. Once an agent directory is available,
+    // new rows keep that original id and the one-time full refresh below repairs already-imported months too.
+    const allAliases = new Map<string, string>();
+    for (const agent of db.find('agents', a => a.company_id === companyId && a.source_integration_id === integrationId)) {
+      for (const code of [agent.code, ...(agent.external_codes || [])].filter(Boolean)) allAliases.set(String(code), agent.id);
+    }
+    const changed: SalesOrder[] = [];
+    for (const order of db.find('sales_orders', o => o.company_id === companyId && o.source_integration_id === integrationId && !!o.external_agent_code)) {
+      const agentId = allAliases.get(String(order.external_agent_code));
+      if (agentId && order.agent_id !== agentId) changed.push({ ...order, agent_id: agentId, updated_at: now });
+    }
+    if (changed.length) db.upsertMany('sales_orders', changed);
+  }
+
   /**
    * Linko customer ledger (sale debts, payments, returns) with real dates, so balances, debt ageing and collections work.
    * The first run reads everything; later runs re-read the last week (late corrections) and upsert by Linko id.
@@ -344,7 +412,8 @@ export class SalesDocHistoryService {
     const entries = await adapter.importLedger(config, from, from ? today : undefined);
     const now = new Date().toISOString();
     db.transaction(() => {
-      const customers = new Map(db.find('customers', c => c.company_id === companyId && !!c.code).map(c => [c.code, c]));
+      const customers = new Map(db.find('customers', c => c.company_id === companyId && !!c.code && (!c.source_integration_id || c.source_integration_id === integrationId)).map(c => [c.code, c]));
+      const oldLedgerIds = new Map(db.find('customer_balance_transactions', t => t.company_id === companyId && t.source_integration_id === integrationId && !!t.external_id).map(t => [String(t.external_id), t.id]));
       const newCustomers: Customer[] = [];
       const rows: CustomerBalanceTransaction[] = [];
       for (const e of entries) {
@@ -358,7 +427,7 @@ export class SalesDocHistoryService {
         const debit = e.amount < 0;
         const value = Math.abs(e.amount);
         rows.push({
-          id: e.externalId, company_id: companyId, customer_id: customer.id,
+          id: oldLedgerIds.get(e.externalId) || `${integrationId}:${e.externalId}`, company_id: companyId, customer_id: customer.id,
           transaction_type: debit ? 'DEBIT' : 'CREDIT',
           ledger_type: e.kind === 'SALE' ? 'SALE' : e.kind === 'PAYMENT' ? 'PAYMENT' : e.kind === 'RETURN' ? 'RETURN' : debit ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
           debit_amount: debit ? value : 0, credit_amount: debit ? 0 : value, amount: value, currency: 'UZS',
@@ -411,11 +480,15 @@ export class SalesDocHistoryService {
     let stored = 0;
     let skipped = 0;
     db.transaction(() => {
-      const customers = new Map<string, Customer>(db.find('customers', c => c.company_id === companyId && !!c.code).map(c => [canonicalCustomerCode(c.code), c]));
-      const productBySku = new Map<string, Product>(db.find('products', p => p.company_id === companyId).map(p => [p.sku, p]));
-      const ordersByExternal = new Map<string, SalesOrder>(db.find('sales_orders', o => o.company_id === companyId && !!o.external_id).map(o => [o.external_id!, o]));
+      const sourceRow = (row: { source_integration_id?: string | null }) => !row.source_integration_id || row.source_integration_id === integrationId;
+      const customers = new Map<string, Customer>(db.find('customers', c => c.company_id === companyId && !!c.code && sourceRow(c)).map(c => [canonicalCustomerCode(c.code), c]));
+      const productBySku = new Map<string, Product>(db.find('products', p => p.company_id === companyId && sourceRow(p)).map(p => [p.sku, p]));
+      const ordersByExternal = new Map<string, SalesOrder>(db.find('sales_orders', o => o.company_id === companyId && !!o.external_id && sourceRow(o)).map(o => [o.external_id!, o]));
       // SalesDoc agent ids (d0_1 …) are stored as agents.code.
-      const agentByCode = new Map(db.find('agents', a => a.company_id === companyId && !!a.code).map(a => [String(a.code), a.id]));
+      const agentByCode = new Map<string, string>();
+      for (const agent of db.find('agents', a => a.company_id === companyId && !!a.code && sourceRow(a))) {
+        for (const code of [agent.code, ...(agent.external_codes || [])]) if (code) agentByCode.set(String(code), agent.id);
+      }
       const newAgents: Agent[] = [];
       if (createAgents) {
         for (const order of orders) {
@@ -453,7 +526,8 @@ export class SalesDocHistoryService {
           ...(old || { created_by: userId, created_at: now }),
           id, company_id: companyId, external_id: order.externalId, order_number: order.orderNumber,
           order_date: order.orderDate, delivery_date: order.deliveryDate || order.orderDate, customer_id: customer.id, customer_name: customer.name,
-          agent_id: (order.agentCode && agentByCode.get(String(order.agentCode))) || old?.agent_id || null,
+          agent_id: order.agentCode ? agentByCode.get(String(order.agentCode)) || null : old?.agent_id || null,
+          external_agent_code: order.agentCode || null,
           expeditor_name: order.expeditorName?.trim() || old?.expeditor_name || null,
           // The distribution total is already net of returns; total_sales keeps the gross so net = total_sales − return_amount as everywhere else.
           total_sales: order.totalAmount + (order.returnAmount || 0), discount_amount: 0, return_amount: order.returnAmount || 0, net_sales: order.totalAmount,
@@ -488,7 +562,7 @@ export class SalesDocHistoryService {
 
   /** Cost of goods of every stored SalesDoc order from today's product costs (history keeps no past costs). */
   static recomputeCogs(companyId: string) {
-    const productBySku = new Map<string, Product>(db.find('products', p => p.company_id === companyId).map(p => [p.sku, p]));
+    const products = db.find('products', p => p.company_id === companyId);
     const orders = db.find('sales_orders', o => o.company_id === companyId && !!o.external_id && o.source === 'DISTRIBUTION');
     const orderIds = new Set(orders.map(o => o.id));
     const itemsByOrder = new Map<string, SalesOrderItem[]>();
@@ -502,7 +576,8 @@ export class SalesDocHistoryService {
     const itemRows: SalesOrderItem[] = [];
     for (const order of orders) {
       const items = itemsByOrder.get(order.id) || [];
-      const cogs = computeOrderCogs(items.map(i => ({ sku: i.sku || i.product_id, name: i.product_name, quantity: i.quantity, price: i.unit_price, total: i.total_amount })), productBySku);
+      const orderProducts = new Map<string, Product>(products.filter(p => !order.source_integration_id || !p.source_integration_id || p.source_integration_id === order.source_integration_id).map(p => [p.sku, p]));
+      const cogs = computeOrderCogs(items.map(i => ({ sku: i.sku || i.product_id, name: i.product_name, quantity: i.quantity, price: i.unit_price, total: i.total_amount })), orderProducts);
       if (order.cogs_status !== cogs.status || order.total_cogs !== cogs.total) {
         orderRows.push({ ...order, total_cogs: cogs.total, cogs_status: cogs.status, gross_profit: cogs.status === 'KNOWN' ? order.net_sales - cogs.total : 0 });
       }

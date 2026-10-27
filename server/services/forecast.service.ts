@@ -3,7 +3,7 @@ import type { Product, Notification } from '../db/schema.ts';
 import { AuditService } from './audit.service.ts';
 import { NotificationService } from './notification.service.ts';
 import { integrationProvider } from '../integrations/provider.ts';
-import { addDays, businessToday, daysBetween } from '../utils/date.ts';
+import { addDays, businessToday, daysBetween, isValidIsoDate } from '../utils/date.ts';
 import { SalesDocHistoryService } from './salesdoc-history.service.ts';
 import { activeDistribution, distributionIntegrations } from '../integrations/distribution.ts';
 import { isPlausibleCost } from './cogs.ts';
@@ -45,6 +45,9 @@ export interface OutOfStockLostProfitItem {
   daily_sales_avg: number;            // daily sales while the product was in stock
   days_out_of_stock: number | null;   // null: no sale and no in-stock sighting to date it
   out_of_stock_since: string | null;
+  zero_stock_observed_at: string | null;
+  stock_observed_at: string | null;
+  estimate_status: 'ESTIMATED' | 'STOCKOUT_DATE_UNKNOWN' | 'NO_DEMAND_DATA' | 'PRICE_UNKNOWN';
   last_sale_date: string | null;
   lost_units: number;
   lost_sales_uzs: number;
@@ -55,18 +58,18 @@ export interface OutOfStockLostProfitItem {
 export class ForecastService {
   /** Forecast window and the part of it that loaded history actually covers. */
   public static getForecastWindow(companyId: string) {
-    // The connected distribution system with history (whichever it is); a switched-off one only if nothing else is set up.
-    const integration=activeDistribution(companyId)?.integration
-      || distributionIntegrations(companyId).find(d=>d.capabilities.history)?.integration;
+    // Only use the active server. Falling back to a disabled/old connection leaks its stock and history after a switch.
+    const integration=activeDistribution(companyId)?.integration;
     const days=Number(integration?.config.forecast_days||100);
     if(!Number.isInteger(days)||days<1||days>3660) throw new Error('Prognoz davri 1–3660 kun bo‘lsin');
     const end=businessToday();
     const start=addDays(end,-(days-1));
     const history=integration?.config.history;
     // Days before the loaded history are unknown, not "zero sales"; they are left out of the divisor.
-    const coveredFrom=history?.from && history.from>start ? history.from : start;
-    const coveredDays=Math.max(0,daysBetween(coveredFrom,end)+1);
-    return {days,start,end,coveredFrom,coveredDays,covered:coveredFrom===start,history};
+    const historyFrom=isValidIsoDate(history?.from) ? history.from : null;
+    const coveredFrom=historyFrom && historyFrom>start ? historyFrom : start;
+    const coveredDays=integration && !historyFrom ? 0 : Math.max(0,daysBetween(coveredFrom,end)+1);
+    return {days,start,end,coveredFrom,coveredDays,covered:coveredDays>0&&coveredFrom===start,history,integrationId:integration?.id||null};
   }
 
   /**
@@ -75,9 +78,12 @@ export class ForecastService {
    */
   public static calculateHistoricalSalesVelocity(companyId: string): void {
     const w=this.getForecastWindow(companyId);
-    const orderDate=new Map(db.find('sales_orders',o=>o.company_id===companyId && o.status==='DELIVERED' && o.order_date>=w.coveredFrom && o.order_date<=w.end).map(o=>[o.id,o.order_date]));
-    const allDelivered=new Map(db.find('sales_orders',o=>o.company_id===companyId && o.status==='DELIVERED').map(o=>[o.id,o.order_date]));
-    const products=db.find('products',p=>p.company_id===companyId);
+    const sameSource=(row:{source_integration_id?:string|null;source?:string|null})=>w.integrationId
+      ? row.source_integration_id===w.integrationId
+      : !row.source_integration_id && (!row.source || row.source==='MANUAL');
+    const orderDate=new Map(db.find('sales_orders',o=>o.company_id===companyId && sameSource(o) && o.status==='DELIVERED' && o.order_date>=w.coveredFrom && o.order_date<=w.end).map(o=>[o.id,o.order_date]));
+    const allDelivered=new Map(db.find('sales_orders',o=>o.company_id===companyId && sameSource(o) && o.status==='DELIVERED').map(o=>[o.id,o.order_date]));
+    const products=db.find('products',p=>p.company_id===companyId && sameSource(p));
     const map=new Map(products.flatMap(p=>[[p.id,p.id],[p.sku,p.id]]));
     const stats=new Map<string,{qty:number;days:Set<string>;first:string|null;last:string|null}>();
     for(const item of db.getTable('sales_order_items')){
@@ -137,7 +143,10 @@ export class ForecastService {
     if (!Number.isFinite(runRateFactor) || runRateFactor < 0 || runRateFactor > 100) throw new Error('Savdo koeffitsienti 0–100 oralig‘ida bo‘lsin');
     if (customDailyDemandMap && Object.values(customDailyDemandMap).some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) throw new Error('Kunlik talab manfiy bo‘lmagan son bo‘lsin');
     this.ensureProductsWithVelocities(companyId);
-    const products = db.find('products', p => p.company_id === companyId && p.is_active);
+    const selectedIntegrationId=this.getForecastWindow(companyId).integrationId;
+    const products = db.find('products', p => p.company_id === companyId && p.is_active && (selectedIntegrationId
+      ? p.source_integration_id===selectedIntegrationId
+      : !p.source_integration_id && (!p.source || p.source==='MANUAL')));
 
     const items: StockRunRateItem[] = [];
     let totalStockValue = 0;
@@ -220,7 +229,9 @@ export class ForecastService {
     const history=w.history;
     const warning=!history?.from
       ? 'Buyurtmalar tarixi yuklanmagan. Prognoz hisoblanmaydi — Integratsiyalar bo‘limida “To‘liq tarixni yuklash”ni bosing.'
-      : !w.covered
+          : w.coveredDays===0
+            ? 'Buyurtmalar tarixi yuklanmagan yoki davr hali tasdiqlanmagan. Kunlik sotuv tezligi va tugagan mahsulotlar yo‘qotish summasi hisoblanmaydi.'
+          : !w.covered
         ? `Tarix ${history.from} dan boshlab yuklangan, prognoz davri esa ${w.start} dan. Hisob faqat ${w.coveredDays} kunlik ma'lumotga tayanadi — ishonchlilik past.`
         : history.status==='FAILED'
           ? `Oxirgi yuklash xato bilan to'xtadi (${history.error}). Oldingi yuklangan oylar ishlatildi.`
@@ -246,20 +257,19 @@ export class ForecastService {
   /**
    * Evaluates Stock-Out items, days missing, lost sales, and lost net profit
    */
-  /**
-   * Date a product ran out: stock reaches zero through a sale, so it is the last sale day, unless an import saw the
-   * product in stock after that (then it went out after that sighting, e.g. a write-off). Null when neither is known.
-   */
-  public static outOfStockSince(p: Pick<Product, 'last_sale_date' | 'last_in_stock_at'>): string | null {
-    const dates = [p.last_sale_date, p.last_in_stock_at].filter((d): d is string => !!d).sort();
-    return dates.length ? dates[dates.length - 1] : null;
+  /** First verified zero-stock snapshot. Last-sale dates do not prove when stock ran out. */
+  public static outOfStockSince(p: Pick<Product, 'zero_stock_observed_at'>): string | null {
+    return isValidIsoDate(p.zero_stock_observed_at) && p.zero_stock_observed_at <= businessToday() ? p.zero_stock_observed_at : null;
   }
 
   public static getOutOfStockLostProfit(companyId: string) {
     this.ensureProductsWithVelocities(companyId);
-    const products = db.find('products', p => p.company_id === companyId && p.is_active);
-    const today = businessToday();
     const w = this.getForecastWindow(companyId);
+    const selectedIntegrationId=w.integrationId;
+    const products = db.find('products', p => p.company_id === companyId && p.is_active && (selectedIntegrationId
+      ? p.source_integration_id===selectedIntegrationId
+      : !p.source_integration_id && (!p.source || p.source==='MANUAL')));
+    const today = businessToday();
 
     const outItems = products.filter(p => (p.stock_quantity || 0) <= 0);
 
@@ -270,27 +280,68 @@ export class ForecastService {
 
     let profitUnknownCount = 0;
     let sinceUnknownCount = 0;
+    let estimateUnknownCount = 0;
+    const selectedSource = (row: { source_integration_id?: string | null; source?: string | null }) => selectedIntegrationId
+      ? row.source_integration_id === selectedIntegrationId
+      : !row.source_integration_id && (!row.source || row.source === 'MANUAL');
+    const productByAlias = new Map<string, Product>();
+    for (const p of products) for (const alias of [p.id, p.sku]) if (alias) productByAlias.set(String(alias), p);
+    const deliveredOrders = new Map(db.find('sales_orders', o => o.company_id === companyId && selectedSource(o) && o.status === 'DELIVERED')
+      .map(o => [o.id, o.order_date] as const));
+    const salesByProduct = new Map<string, { date: string; qty: number; value: number }[]>();
+    for (const line of db.getTable('sales_order_items')) {
+      const p = productByAlias.get(String(line.product_id || '')) || productByAlias.get(String(line.sku || ''));
+      const date = deliveredOrders.get(line.sales_order_id);
+      const qty = Number(line.quantity);
+      if (!p || !date || !Number.isFinite(qty) || qty <= 0) continue;
+      const value = Number(line.total_amount) > 0 ? Number(line.total_amount) : Math.max(0, Number(line.unit_price) || 0) * qty;
+      const list = salesByProduct.get(p.id) || [];
+      list.push({ date, qty, value });
+      salesByProduct.set(p.id, list);
+    }
     for (const p of outItems) {
       const since = this.outOfStockSince(p);
-      const daysOut = since ? Math.max(0, daysBetween(since, today)) : null;
-      if (since === null) sinceUnknownCount++;
-      // Demand while the product was on sale: the window's sales over the window days it was in stock
-      // (days after the stock-out had no sales because there was nothing to sell, not because nobody wanted it).
-      const outDaysInWindow = daysOut === null ? 0 : Math.min(daysOut, w.coveredDays);
-      const inStockDays = w.coveredDays - outDaysInWindow;
-      const soldInWindow = Math.max(0, p.velocity_quantity ?? 0);
-      const dailyAvg = inStockDays > 0 ? soldInWindow / inStockDays : 0;
-      // Lost days count only inside the window, so a product dropped long ago does not pile up years of "lost" sales.
-      const lostUnits = outDaysInWindow * dailyAvg;
+      const stockObservedAt = isValidIsoDate(p.stock_observed_at) && p.stock_observed_at <= today ? p.stock_observed_at : null;
+      const daysOut = since && stockObservedAt && stockObservedAt >= since ? Math.max(0, daysBetween(since, stockObservedAt)) : null;
+      if (since === null || !stockObservedAt) sinceUnknownCount++;
+      const lostFromCandidate = since ? addDays(since, 1) : null;
+      const coverageStart = w.coveredFrom > w.start ? w.coveredFrom : w.start;
+      const lostFrom = lostFromCandidate && lostFromCandidate > coverageStart ? lostFromCandidate : coverageStart;
+      const lossEnd = stockObservedAt && stockObservedAt < w.end ? stockObservedAt : w.end;
+      const lostDaysInWindow = since && stockObservedAt && w.coveredDays > 0 && lostFrom <= lossEnd ? daysBetween(lostFrom, lossEnd) + 1 : 0;
+      // Use a same-length, fully loaded period immediately before the first confirmed zero snapshot as the demand
+      // baseline. Do not treat days after the zero snapshot as zero demand, or infer a stock-out from last_sale_date.
+      const baselineEnd = since ? addDays(since, -1) : null;
+      const requestedBaselineStart = baselineEnd ? addDays(baselineEnd, -(w.days - 1)) : null;
+      const baselineStart = requestedBaselineStart && isValidIsoDate(w.history?.from) && w.history.from > requestedBaselineStart
+        ? w.history.from : requestedBaselineStart;
+      const baselineDays = !baselineEnd || !baselineStart || baselineStart > baselineEnd || (selectedIntegrationId && !isValidIsoDate(w.history?.from))
+        ? 0 : daysBetween(baselineStart, baselineEnd) + 1;
+      const baselineLines = (salesByProduct.get(p.id) || []).filter(x => baselineStart && baselineEnd && x.date >= baselineStart && x.date <= baselineEnd);
+      const soldBeforeOut = baselineLines.reduce((s, x) => s + x.qty, 0);
+      const salesValueBeforeOut = baselineLines.reduce((s, x) => s + x.value, 0);
+      const dailyAvg = baselineDays > 0 ? soldBeforeOut / baselineDays : 0;
+      const estimateStatus: OutOfStockLostProfitItem['estimate_status'] = since === null || stockObservedAt === null
+        ? 'STOCKOUT_DATE_UNKNOWN'
+        : soldBeforeOut <= 0 || baselineDays <= 0
+          ? 'NO_DEMAND_DATA'
+          : (salesValueBeforeOut <= 0 && !(p.selling_price > 0))
+            ? 'PRICE_UNKNOWN'
+            : 'ESTIMATED';
+      if (estimateStatus !== 'ESTIMATED') estimateUnknownCount++;
+      // Losses are estimates for the selected window and only begin after the first verified zero snapshot.
+      const lostUnits = estimateStatus === 'ESTIMATED' ? lostDaysInWindow * dailyAvg : 0;
+      const observedSalePrice = soldBeforeOut > 0 ? salesValueBeforeOut / soldBeforeOut : 0;
+      const estimateSalePrice = observedSalePrice || p.selling_price || 0;
       // Without a real purchase cost the whole price would count as profit; lost profit is then not calculated.
       const cost = p.purchase_cost || p.current_cost || 0;
-      const costKnown = isPlausibleCost(cost, p.selling_price || 0);
+      const costKnown = isPlausibleCost(cost, estimateSalePrice);
       if (!costKnown && lostUnits > 0) profitUnknownCount++;
-      const unitProfit = costKnown ? Math.max(0, (p.selling_price || 0) - cost) : 0;
-      const lostSales = lostUnits * (p.selling_price || 0);
+      const unitProfit = costKnown ? Math.max(0, estimateSalePrice - cost) : 0;
+      const lostSales = lostUnits * estimateSalePrice;
       const lostProfit = lostUnits * unitProfit;
-      const marginPct = p.selling_price && p.selling_price > 0 
-        ? Number(((unitProfit / p.selling_price) * 100).toFixed(1)) 
+      const marginPct = estimateSalePrice > 0
+        ? Number(((unitProfit / estimateSalePrice) * 100).toFixed(1))
         : 0;
 
       totalLostSales += lostSales;
@@ -310,6 +361,9 @@ export class ForecastService {
         daily_sales_avg: Number(dailyAvg.toFixed(3)),
         days_out_of_stock: daysOut,
         out_of_stock_since: since,
+        zero_stock_observed_at: since,
+        stock_observed_at: stockObservedAt,
+        estimate_status: estimateStatus,
         last_sale_date: p.last_sale_date ?? null,
         lost_units: lostUnits,
         lost_sales_uzs: lostSales,
@@ -326,6 +380,7 @@ export class ForecastService {
         total_lost_profit_uzs: totalLostProfit,
         profit_unknown_count: profitUnknownCount,
         since_unknown_count: sinceUnknownCount,
+        estimate_unknown_count: estimateUnknownCount,
         window_days: w.coveredDays
       },
       // Biggest loss first, then the longest out of stock.
@@ -348,11 +403,11 @@ export class ForecastService {
     if (!s.out_of_stock_count) return { success: true, sent: false, message: 'Tugagan tovar yo‘q — ogohlantirish kerak emas.' };
     const money = (v: number) => `${Math.round(v).toLocaleString('ru-RU')} so‘m`;
     const top = [...data.items].sort((a, b) => b.lost_sales_uzs - a.lost_sales_uzs).slice(0, 5);
-    const lines = top.map(i => `• ${i.name}: ${i.days_out_of_stock === null ? 'qachondan beri — noma’lum' : `${i.days_out_of_stock} kundan beri yo‘q`}, boy berilgan savdo ${money(i.lost_sales_uzs)}`);
+    const lines = top.map(i => `• ${i.name}: ${i.days_out_of_stock === null ? '0 qoldiq sanasi tasdiqlanmagan' : `0 qoldiq ${i.days_out_of_stock} kun oldin tasdiqlangan`}, ${i.estimate_status === 'ESTIMATED' ? `taxminiy boy berilgan savdo ${money(i.lost_sales_uzs)}` : 'boy berilgan savdo hisoblanmadi — tarix yetarli emas'}`);
     const profitLine = s.profit_unknown_count
       ? `Boy berilgan foyda: hisoblanmadi (${s.profit_unknown_count} ta tovarda kirim narxi yo‘q).`
       : `Boy berilgan foyda: ${money(s.total_lost_profit_uzs)}.`;
-    const message = [`Omborda ${s.out_of_stock_count} ta tovar tugagan.`, ...lines, '', `Boy berilgan savdo: ${money(s.total_lost_sales_uzs)}.`, profitLine, 'Ta’minotchiga buyurtma bering.'].join('\n');
+    const message = [`Omborda ${s.out_of_stock_count} ta tovarning qoldig‘i 0.`, ...lines, '', `Taxminiy boy berilgan savdo: ${money(s.total_lost_sales_uzs)}.`, `${s.estimate_unknown_count} ta tovarda yetarli sana yoki sotuv tarixi yo‘q.`, profitLine, 'Ta’minotchiga buyurtma bering.'].join('\n');
     const notif = NotificationService.dispatchEvent(companyId, 'STOCKOUT_WARNING', '🚨 Tugagan tovarlar', message, { out_of_stock_count: s.out_of_stock_count, total_lost_sales_uzs: s.total_lost_sales_uzs });
     AuditService.log({ company_id: companyId, user_id: userId, user_email: userEmail, action: 'CREATE', entity: 'Notification', entity_id: notif.id, new_value: { event: 'STOCKOUT_WARNING', count: s.out_of_stock_count }, reason: 'Tugagan tovarlar ogohlantirishi yuborildi' });
     const hasBot = db.find('notification_rules', r => r.company_id === companyId && r.event_type === 'STOCKOUT_WARNING' && r.is_active).length > 0;

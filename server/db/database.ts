@@ -292,7 +292,16 @@ class DatabaseManager {
   private hiddenSources(tableName: string): Set<string> | null {
     if (!SOURCED_TABLES.has(tableName)) return null;
     let hidden: Set<string> | null = null;
-    for (const i of this.data.integrations as any[]) if (i.disabled) (hidden ||= new Set()).add(i.id);
+    const integrations = this.data.integrations as any[];
+    const known = new Set(integrations.map(i => String(i.id)));
+    for (const i of integrations) if (i.disabled) (hidden ||= new Set()).add(String(i.id));
+    // Keep imported rows hidden if an admin permanently removes its connection record.
+    // The historical rows stay in the database for audit/recovery; deleting the connection
+    // must not make that server's old data reappear in current screens.
+    for (const row of this.data[tableName as keyof DatabaseSchema] as any[]) {
+      const sourceId = row?.source_integration_id;
+      if (sourceId && !known.has(String(sourceId))) (hidden ||= new Set()).add(String(sourceId));
+    }
     return hidden;
   }
 

@@ -42,15 +42,21 @@ export const StockoutTable: React.FC<{ items: OutOfStockLostProfitItem[]; fileNa
       && (!cost || (cost === 'known' ? profitKnown(i) : !profitKnown(i))))
     .sort(SORTS.find(s => s[0] === sort)?.[2] || SORTS[0][2]), [items, q, category, age, source, cost, sort]);
 
-  const total = (k: 'lost_sales_uzs' | 'lost_profit_uzs' | 'lost_units') => visible.reduce((s, i) => s + (k === 'lost_profit_uzs' && !profitKnown(i) ? 0 : i[k] || 0), 0);
+const total = (k: 'lost_sales_uzs' | 'lost_profit_uzs' | 'lost_units') => visible.reduce((s, i) => s + (i.estimate_status && i.estimate_status !== 'ESTIMATED' ? 0 : k === 'lost_profit_uzs' && !profitKnown(i) ? 0 : i[k] || 0), 0);
   const unknownShown = visible.filter(i => !profitKnown(i)).length;
+const estimateLabel = (i: OutOfStockLostProfitItem) => ({
+  STOCKOUT_DATE_UNKNOWN: '0 qoldiq qachondan boshlanganini aniqlab bo‘lmadi',
+  NO_DEMAND_DATA: 'Sotuv tarixi yetarli emas',
+  PRICE_UNKNOWN: 'Sotuv narxi aniqlanmagan',
+} as Record<string, string>)[i.estimate_status || ''] || '';
 
   const exportExcel = () => exportTableXlsx({
     fileName,
     title: 'Tugagan mahsulotlar va boy berilgan savdo',
     columns: [
       { header: 'Mahsulot', key: 'name', width: 34 }, { header: 'SKU', key: 'sku', width: 12 }, { header: 'Kategoriya', key: 'category', width: 22 },
-      { header: 'Tugagan sana', key: 'out_of_stock_since', type: 'date' }, { header: 'Necha kundan beri', key: 'days_out_of_stock', type: 'number' },
+      { header: '0 qoldiq birinchi tasdiqlangan sana', key: 'out_of_stock_since', type: 'date' }, { header: '0 qoldiq tasdiqlanganidan o‘tgan kun', key: 'days_out_of_stock', type: 'number' },
+      { header: 'Oxirgi ombor tekshiruvi', key: 'stock_observed_at', type: 'date' }, { header: 'Hisob holati', key: 'estimate_status', width: 24 },
       { header: 'Oxirgi sotuv', key: 'last_sale_date', type: 'date' }, { header: 'Kunlik o‘rtacha sotuv', key: 'daily_sales_avg', type: 'number' },
       { header: 'Sotilmagan miqdor', key: 'lost_units', type: 'number', total: true }, { header: 'Boy berilgan sotuv', key: 'lost_sales_uzs', type: 'money', total: true },
       { header: 'Foyda / dona', key: 'unit_profit_x', type: 'money' }, { header: 'Boy berilgan foyda', key: 'lost_profit_x', type: 'money', total: true },
@@ -90,7 +96,7 @@ export const StockoutTable: React.FC<{ items: OutOfStockLostProfitItem[]; fileNa
             <tr>
               <th className="px-3 py-2.5">Mahsulot</th>
               <th className="px-3 py-2.5">Kategoriya</th>
-              <th className="px-3 py-2.5 text-center">Tugagan vaqti</th>
+              <th className="px-3 py-2.5 text-center">0 qoldiq tekshiruvi</th>
               <th className="px-3 py-2.5 text-right">Kunlik sotuv</th>
               <th className="px-3 py-2.5 text-right">Boy berilgan sotuv</th>
               <th className="px-3 py-2.5 text-right">Foyda / dona</th>
@@ -105,10 +111,10 @@ export const StockoutTable: React.FC<{ items: OutOfStockLostProfitItem[]; fileNa
                 <td className="px-3 py-2.5 text-neutral-600">{i.category}</td>
                 <td className="px-3 py-2.5 text-center">
                   <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-extrabold ${i.days_out_of_stock === null ? 'bg-neutral-100 text-neutral-600' : 'bg-rose-100 text-rose-900'}`}>{stockOutLabel(i)}</span>
-                  {i.out_of_stock_since && <div className="mt-0.5 text-[10px] text-neutral-400">{i.out_of_stock_since.split('-').reverse().join('.')} dan</div>}
+                  {i.stock_observed_at && <div className="mt-0.5 text-[10px] text-neutral-400">Oxirgi tekshiruv: {i.stock_observed_at.split('-').reverse().join('.')}</div>}
                 </td>
                 <td className="px-3 py-2.5 text-right font-semibold text-neutral-800">{Number((i.daily_sales_avg || 0).toFixed(2))} {i.unit || 'dona'}/kun</td>
-                <td className="px-3 py-2.5 text-right"><div className="font-bold text-neutral-900">{money(i.lost_sales_uzs)}</div><div className="text-[10px] text-neutral-500">{Number((i.lost_units || 0).toFixed(1))} {i.unit || 'dona'}</div></td>
+                <td className="px-3 py-2.5 text-right">{estimateLabel(i) ? <span className="text-[10px] text-amber-700">{estimateLabel(i)}</span> : <><div className="font-bold text-neutral-900">{money(i.lost_sales_uzs)}</div><div className="text-[10px] text-neutral-500">taxminan {Number((i.lost_units || 0).toFixed(1))} {i.unit || 'dona'}</div></>}</td>
                 <td className="px-3 py-2.5 text-right">{profitKnown(i) ? <><div className="font-semibold text-neutral-700">{money(i.unit_profit)}</div><div className="text-[10px] font-bold text-emerald-600">{i.profit_margin_pct}% marja</div></> : <span className="text-[10px] text-neutral-400">kirim narxi yo‘q</span>}</td>
                 <td className="px-3 py-2.5 text-right">{profitKnown(i) ? <span className="text-sm font-black text-rose-600">{money(i.lost_profit_uzs)}</span> : <span className="text-[10px] text-neutral-400">hisoblanmadi</span>}</td>
                 <td className="px-3 py-2.5 text-center"><span className="rounded-md bg-indigo-50 px-2 py-0.5 font-bold text-indigo-700">{Math.round((i.daily_sales_avg || 0) * 30)} {i.unit || 'dona'}</span></td>

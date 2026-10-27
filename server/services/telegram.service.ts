@@ -16,6 +16,7 @@ export const isTelegramToken = (token: string) => /^\d{5,}:[A-Za-z0-9_-]{30,}$/.
 export const escapeHtml = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export class TelegramService {
+  private static updatesTails = new Map<string, Promise<unknown>>();
   /** Replaced in tests. */
   static fetchImpl: typeof fetch = (...args) => fetch(...args);
 
@@ -51,12 +52,33 @@ export class TelegramService {
     return { id: me.id, name: me.first_name, username: me.username };
   }
 
+  static async getWebhookInfo(token: string): Promise<{ url: string }> {
+    const info = await this.call(token, 'getWebhookInfo');
+    return { url: String(info?.url || '') };
+  }
+
+  /** Serialize getUpdates calls per token: Telegram rejects simultaneous pollers with a 409 conflict. */
+  static async getUpdates(token: string, body: Record<string, unknown> = {}): Promise<any[]> {
+    const key = token.trim();
+    const previous = this.updatesTails.get(key) || Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>(resolve => { release = resolve; });
+    const tail = previous.then(() => current);
+    this.updatesTails.set(key, tail);
+    await previous;
+    try { return await this.call(key, 'getUpdates', body); }
+    finally {
+      release();
+      if (this.updatesTails.get(key) === tail) this.updatesTails.delete(key);
+    }
+  }
+
   /**
    * Chats that recently wrote to the bot or added it to a group (Telegram keeps updates ~24 h).
    * So the owner never has to look up a chat_id by hand.
    */
   static async findChats(token: string): Promise<{ id: string; title: string; type: string }[]> {
-    const updates: any[] = await this.call(token, 'getUpdates', { limit: 100, allowed_updates: ['message', 'my_chat_member', 'channel_post'] });
+    const updates: any[] = await this.getUpdates(token, { limit: 100, allowed_updates: ['message', 'my_chat_member', 'channel_post'] });
     const chats = new Map<string, { id: string; title: string; type: string }>();
     for (const u of updates) {
       const chat = u.message?.chat || u.my_chat_member?.chat || u.channel_post?.chat;

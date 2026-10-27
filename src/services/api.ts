@@ -16,7 +16,8 @@ const TOKEN_KEY = 'distro_finance_jwt_token';
 
 /** Employees' Telegram accounts (set by the admin) and group video posters not assigned yet. */
 export interface TelegramAccountsView {
-  bot_username: string | null; checkin_group: boolean;
+  bot_username: string | null; checkin_group: boolean; polling_error?: string | null; last_poll_at?: string | null; poller_enabled?: boolean;
+  last_update?: { at: string; chat: string; sender: string; kind: string; checkin_group: boolean; checkin_result: string | null } | null;
   senders: { id: string; name: string; username: string | null; last_at: string; videos: number }[];
   employees: { id: string; name: string; position: string; telegram_user_id: string | null; telegram_name: string | null; bot_linked: boolean }[];
 }
@@ -129,7 +130,7 @@ export type BotView = {
   id: string; name: string; is_active: boolean; bot_username: string | null; token_masked: string | null;
   chat_id: string; chat_title: string; topic_id: string; daily_report_hour: number; events: string[];
   sent: number; pending: number; failed: number; last_sent_at: string | null; last_error: string | null; created_at: string;
-  personal: boolean; personal_events: string[]; remind_before_min: number; missed_after_min: number; morning_hour: number; linked_people: number; checkin_chat_id: string; checkin_chat_title: string;
+  personal: boolean; personal_events: string[]; remind_before_min: number; missed_after_min: number; morning_hour: number; linked_people: number; checkin_enabled: boolean; poll_error: string | null; last_poll_at: string | null; last_update?: TelegramAccountsView['last_update']; poller_enabled?: boolean; checkin_chat_id: string; checkin_chat_title: string;
 };
 export type StaffKey = { employee_id?: string; user_id?: string };
 export type StaffTelegramPerson = { key: StaffKey; name: string; position: string; linked: boolean; blocked: boolean; chat_name: string | null; linked_at: string | null };
@@ -192,7 +193,7 @@ export const api = {
   verifyCashCancellations: (id: string): Promise<{ cancelled: number; still: string[]; message: string }> => fetchApi('/api/cash/days/' + id + '/verify-cancellations', { method: 'POST' }),
   refreshCashOrders: (id:string):Promise<any> => fetchApi('/api/cash/days/'+id+'/sync-orders',{method:'POST'}),
   getExchangeRate: (date?: string): Promise<{ rate: number | null; date: string; error?: string }> => fetchApi('/api/cash/exchange-rate' + (date ? '?date=' + encodeURIComponent(date) : '')),
-  getSalesDocHistoryStatus: (provider?: string): Promise<{ configured: boolean; running?: boolean; history: any; system?: string }> => fetchApi(`/api/integrations/${encodeURIComponent(provider || 'active')}/history-status`),
+  getSalesDocHistoryStatus: (provider?: string, integrationId?: string): Promise<{ configured: boolean; running?: boolean; history: any; system?: string }> => fetchApi(`/api/integrations/${encodeURIComponent(provider || 'active')}/history-status${integrationId ? `?integration_id=${encodeURIComponent(integrationId)}` : ''}`),
   /** The connected distribution system (any: SalesDoctor, Linko, …): its name and what it can do. */
   getActiveDistribution: (): Promise<{ active: DistributionSystem | null; systems: (DistributionSystem & { status: string; disabled: boolean })[] }> => fetchApi('/api/integrations/active'),
   getSalesDocPriceTypes: (provider = 'active', integrationId?: string): Promise<{ system?: string; priceTypes: { id: string; name: string; kind: 'sale' | 'purchase'; active: boolean; currency?: string | null }[]; selected: { sale: string[]; purchase: string }; used: { sale: string | null; purchase: string | null } }> => fetchApi(`/api/integrations/${encodeURIComponent(provider)}/price-types${integrationId ? `?integration_id=${encodeURIComponent(integrationId)}` : ''}`),
@@ -296,7 +297,7 @@ export const api = {
 
   bots: {
     list: (): Promise<{ bots: BotView[]; events: { type: string; label: string; hint: string }[]; staff_reminders: { type: string; label: string; hint: string }[] }> => fetchApi('/api/system/bots'),
-    save: (bot: { id?: string; name: string; bot_token?: string; chat_id: string; chat_title?: string; topic_id?: string; events: string[]; is_active?: boolean; daily_report_hour?: number; personal?: boolean; personal_events?: string[]; remind_before_min?: number; missed_after_min?: number; morning_hour?: number; checkin_chat_id?: string; checkin_chat_title?: string }): Promise<{ bot: BotView }> =>
+    save: (bot: { id?: string; name: string; bot_token?: string; chat_id: string; chat_title?: string; topic_id?: string; events: string[]; is_active?: boolean; daily_report_hour?: number; personal?: boolean; checkin_enabled?: boolean; personal_events?: string[]; remind_before_min?: number; missed_after_min?: number; morning_hour?: number; checkin_chat_id?: string; checkin_chat_title?: string }): Promise<{ bot: BotView }> =>
       fetchApi('/api/system/bots', { method: 'POST', body: JSON.stringify(bot) }),
     remove: (id: string): Promise<any> => fetchApi(`/api/system/bots/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     findChats: (ref: { id?: string; bot_token?: string }): Promise<{ bot: { username: string; name: string }; chats: { id: string; title: string; type: string }[] }> =>
@@ -1188,6 +1189,17 @@ export const api = {
     return fetchApi(`/api/integrations/${encodeURIComponent(providerName)}/enabled`, {
       method: 'POST',
       body: JSON.stringify({ enabled, integration_id: integrationId })
+    });
+  },
+
+  deleteIntegration: async (integrationId: string): Promise<{ success: boolean; message: string }> => {
+    return fetchApi(`/api/integrations/connection/${encodeURIComponent(integrationId)}`, { method: 'DELETE' });
+  },
+
+  setPrimaryIntegration: async (providerName: string, integrationId: string): Promise<{ success: boolean; message: string }> => {
+    return fetchApi(`/api/integrations/${encodeURIComponent(providerName)}/primary`, {
+      method: 'POST',
+      body: JSON.stringify({ integration_id: integrationId })
     });
   },
 

@@ -2,6 +2,8 @@ import { db } from '../db/database.ts';
 import { AnalyticsService } from './analytics.service.ts';
 import { isValidIsoDate } from '../utils/date.ts';
 import { OTHER_TEAM, TeamsService } from './teams.service.ts';
+import type { SalesOrderItem } from '../db/schema.ts';
+import { matchesIntegrationSource } from './source-tagging.service.ts';
 
 export interface Period { from: string; to: string }
 /** up = growth is good (sales, profit); down = growth is bad (costs, expenses); neutral = no judgement. */
@@ -18,7 +20,7 @@ function assertPeriod(p: Period, name: string) {
  * latest days look like a fall. Delivered and still-on-the-way parts are kept apart.
  */
 function periodFacts(companyId: string, p: Period, integrationId?: string) {
-  const orders = db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && o.order_date >= p.from && o.order_date <= p.to && (!integrationId || o.source_integration_id === integrationId));
+  const orders = db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && o.order_date >= p.from && o.order_date <= p.to && matchesIntegrationSource(o, integrationId));
   const pending = orders.filter(o => o.status !== 'DELIVERED');
   const net = (o: any) => (o.total_sales || 0) - (o.discount_amount || 0) - (o.return_amount || 0);
   const byCustomer = new Map<string, { sales: number; orders: number }>();
@@ -60,7 +62,7 @@ function periodFacts(companyId: string, p: Period, integrationId?: string) {
  */
 function teamSplit(companyId: string, orders: any[], teamOf: Map<string, string>, integrationId?: string) {
   const net = (o: any) => (o.total_sales || 0) - (o.discount_amount || 0) - (o.return_amount || 0);
-  const categoryBySku = new Map(db.find('products', p => p.company_id === companyId && (!integrationId || p.source_integration_id === integrationId)).map(p => [p.sku, String(p.category || '').replace(/\s+/g, ' ').trim()]));
+  const categoryBySku = new Map(db.find('products', p => p.company_id === companyId && matchesIntegrationSource(p, integrationId)).map(p => [p.sku, String(p.category || '').replace(/\s+/g, ' ').trim()]));
   const byOrder = new Map(orders.map(o => [o.id, o]));
   const out = new Map<string, { sales: number; orders: Set<string>; customers: Set<string> }>();
   const add = (o: any, team: string, amount: number) => {
@@ -69,15 +71,36 @@ function teamSplit(companyId: string, orders: any[], teamOf: Map<string, string>
     r.sales += amount; r.orders.add(o.id); r.customers.add(o.customer_id);
     out.set(key, r);
   };
-  const withLines = new Set<string>();
+  const linesByOrder = new Map<string, SalesOrderItem[]>();
   for (const item of db.getTable('sales_order_items')) {
-    const o = byOrder.get(item.sales_order_id);
-    if (!o) continue;
-    withLines.add(o.id);
-    const share = o.total_sales ? net(o) / o.total_sales : 1;
-    add(o, teamOf.get(categoryBySku.get(item.sku || item.product_id) || '') || OTHER_TEAM, (item.total_amount || 0) * share);
+    if (!byOrder.has(item.sales_order_id)) continue;
+    const rows = linesByOrder.get(item.sales_order_id) || [];
+    rows.push(item);
+    linesByOrder.set(item.sales_order_id, rows);
   }
-  for (const o of orders) if (!withLines.has(o.id)) add(o, OTHER_TEAM, net(o));
+  for (const o of orders) {
+    const lines = linesByOrder.get(o.id) || [];
+    const validLines = lines.map(line => ({ line, amount: Number(line.total_amount) }))
+      .filter(row => Number.isFinite(row.amount) && row.amount > 0);
+    const sourceTotal = validLines.reduce((sum, row) => sum + row.amount, 0);
+    const orderNet = Math.round(net(o));
+    if (!validLines.length || sourceTotal <= 0) {
+      // An order without usable product amounts still belongs in agent totals; keep it visible as unclassified.
+      add(o, OTHER_TEAM, orderNet);
+      continue;
+    }
+    // Source line totals often exclude/round discounts or omit a line. Normalize by the line total so teams always
+    // reconcile exactly to the order's net total; put any integer-rounding remainder on the last line.
+    let allocated = 0;
+    validLines.forEach(({ line, amount }, index) => {
+      const share = amount / sourceTotal;
+      const allocatedAmount = index === validLines.length - 1
+        ? orderNet - allocated
+        : Math.round(orderNet * share);
+      allocated += allocatedAmount;
+      add(o, teamOf.get(categoryBySku.get(line.sku || line.product_id) || '') || OTHER_TEAM, allocatedAmount);
+    });
+  }
   return out;
 }
 
@@ -127,7 +150,7 @@ export function comparePeriods(companyId: string, a: Period, b: Period, integrat
 
   // Customers who bought before period A: anyone without earlier delivered orders counts as new.
   const firstOrder = new Map<string, string>();
-  for (const o of db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && (!integrationId || o.source_integration_id === integrationId))) {
+  for (const o of db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && matchesIntegrationSource(o, integrationId))) {
     const prev = firstOrder.get(o.customer_id);
     if (!prev || o.order_date < prev) firstOrder.set(o.customer_id, o.order_date);
   }
@@ -234,15 +257,15 @@ export function compareAgent(companyId: string, agentId: string, a: Period, b: P
   if (agentId !== 'none' && (!agent || agent.company_id !== companyId)) throw Object.assign(new Error('Agent topilmadi'), { status: 404 });
   const net = (o: any) => (o.total_sales || 0) - (o.discount_amount || 0) - (o.return_amount || 0);
   const mine = (o: any) => (agentId === 'none' ? !o.agent_id : o.agent_id === agentId);
-  const productBySku = new Map(db.find('products', p => p.company_id === companyId && (!integrationId || p.source_integration_id === integrationId)).map(p => [p.sku, p]));
+  const productBySku = new Map(db.find('products', p => p.company_id === companyId && matchesIntegrationSource(p, integrationId)).map(p => [p.sku, p]));
   const firstOrder = new Map<string, string>();
-  for (const o of db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && mine(o) && (!integrationId || o.source_integration_id === integrationId))) {
+  for (const o of db.find('sales_orders', o => o.company_id === companyId && o.status !== 'CANCELLED' && mine(o) && matchesIntegrationSource(o, integrationId))) {
     const prev = firstOrder.get(o.customer_id);
     if (!prev || o.order_date < prev) firstOrder.set(o.customer_id, o.order_date);
   }
 
   const facts = (p: Period) => {
-    const all = db.find('sales_orders', o => o.company_id === companyId && mine(o) && o.order_date >= p.from && o.order_date <= p.to && (!integrationId || o.source_integration_id === integrationId));
+    const all = db.find('sales_orders', o => o.company_id === companyId && mine(o) && o.order_date >= p.from && o.order_date <= p.to && matchesIntegrationSource(o, integrationId));
     const orders = all.filter(o => o.status !== 'CANCELLED');
     const cancelled = all.filter(o => o.status === 'CANCELLED');
     const delivered = orders.filter(o => o.status === 'DELIVERED');

@@ -67,6 +67,9 @@ const ReportTab: React.FC<{ employees: any[]; isAdmin: boolean; onError: (e: str
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [mode, setMode] = useState('RULES');
+  const [excuseTarget, setExcuseTarget] = useState<any | null>(null);
+  const [excuseReason, setExcuseReason] = useState('');
+  const [excuseBusy, setExcuseBusy] = useState(false);
   const load = () => api.attendance.report(from, to).then(r => { setRows(r.rows); setMode(r.mode); }).catch(e => onError(e.message));
   useEffect(() => { load(); }, [from, to]);
   const visible = rows.filter(r => matchesSearch(r, q, ['employee_name', 'position']) && (!status || picked(status).some(s => r.status === s || (s === 'LATE' && r.late_minutes > 0))));
@@ -75,10 +78,15 @@ const ReportTab: React.FC<{ employees: any[]; isAdmin: boolean; onError: (e: str
     percent: Math.round(visible.reduce((s, r) => s + (r.penalty_percent || 0), 0) * 100) / 100
   }), [visible]);
   const rulesMode = mode === 'RULES';
-  const excuse = async (r: any) => {
-    const reason = prompt(`${r.employee_name}, ${r.date}: ${r.status === 'EXCUSED' ? 'uzrni bekor qilish' : 'uzrli deb belgilash'} sababi?`);
-    if (!reason) return;
-    try { await api.attendance.excuse(r.employee_id, r.date, r.status !== 'EXCUSED', reason); onFlash('Saqlandi.'); load(); } catch (e: any) { onError(e.message); }
+  const excuse = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!excuseTarget || excuseReason.trim().length < 3) { onError('Sababni kamida 3 ta belgi bilan yozing.'); return; }
+    setExcuseBusy(true);
+    try {
+      await api.attendance.excuse(excuseTarget.employee_id, excuseTarget.date, excuseTarget.status !== 'EXCUSED', excuseReason.trim());
+      onFlash(excuseTarget.status === 'EXCUSED' ? 'Uzr bekor qilindi.' : 'Xodim sababli qilindi.');
+      setExcuseTarget(null); setExcuseReason(''); load();
+    } catch (e: any) { onError(e.message); } finally { setExcuseBusy(false); }
   };
   return (
     <div className="space-y-3">
@@ -101,7 +109,7 @@ const ReportTab: React.FC<{ employees: any[]; isAdmin: boolean; onError: (e: str
           filters: [`davr: ${from} — ${to}`, q && `qidiruv: "${q}"`, status && picked(status).map(s => s === 'LATE' ? 'kechikkanlar' : DAY_STATUS[s]?.label).join(', ')]
         })}
       />
-      <div className="grid grid-cols-3 gap-3 text-xs">
+      <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-3 sm:gap-3">
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3"><b className="text-lg text-amber-900">{totals.late}</b><div className="text-amber-800">kechikish</div></div>
         <div className="rounded-xl border border-rose-200 bg-rose-50 p-3"><b className="text-lg text-rose-900">{totals.absent}</b><div className="text-rose-800">kelmagan kun</div></div>
         {rulesMode
@@ -122,12 +130,24 @@ const ReportTab: React.FC<{ employees: any[]; isAdmin: boolean; onError: (e: str
                 <td className={`px-3 text-right ${r.late_minutes ? 'font-bold text-amber-700' : ''}`}>{r.late_minutes ? `${r.late_minutes} daq` : '—'}</td>
                 <td className={`px-3 text-right ${r.early_minutes ? 'font-bold text-amber-700' : ''}`}>{r.early_minutes ? `${r.early_minutes} daq` : '—'}</td>
                 <td className="px-3 text-right">{rulesMode ? (r.penalty_percent ? <span title={(r.violations || []).join(', ')} className="font-bold text-rose-700">{r.penalty_percent}%</span> : '—') : (r.penalty ? money(r.penalty) : '—')}</td>
-                <td className="px-3 text-right">{isAdmin && (rulesMode ? (r.status === 'ABSENT' || r.status === 'EXCUSED') : (r.late_minutes || r.early_minutes || r.status === 'ABSENT' || r.status === 'EXCUSED')) && <button onClick={() => excuse(r)} className="text-[11px] font-semibold text-blue-700 hover:underline">{r.status === 'EXCUSED' ? 'Uzrni olish' : 'Sababli qilish'}</button>}</td>
+                <td className="px-3 text-right">{isAdmin && (rulesMode ? (r.status === 'ABSENT' || r.status === 'EXCUSED') : (r.late_minutes || r.early_minutes || r.status === 'ABSENT' || r.status === 'EXCUSED')) && <button onClick={() => { setExcuseTarget(r); setExcuseReason(''); }} className="whitespace-nowrap text-[11px] font-semibold text-blue-700 hover:underline">{r.status === 'EXCUSED' ? 'Uzrni olish' : 'Sababli qilish'}</button>}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {excuseTarget && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="excuse-title">
+        <form onSubmit={excuse} className="w-full max-w-md space-y-3 rounded-2xl bg-white p-4 shadow-2xl sm:p-5">
+          <div><h3 id="excuse-title" className="text-sm font-bold text-neutral-900">{excuseTarget.status === 'EXCUSED' ? 'Uzrli holatni bekor qilish' : 'Xodimni sababli deb belgilash'}</h3><p className="mt-1 text-xs text-neutral-500">{excuseTarget.employee_name} · {excuseTarget.date}</p></div>
+          <label className="block text-xs font-semibold text-neutral-700">Sabab
+            <textarea autoFocus required minLength={3} maxLength={300} rows={3} className="mt-1 w-full rounded-lg border border-neutral-300 p-2.5 text-sm focus:border-blue-500 focus:outline-none" value={excuseReason} onChange={e => setExcuseReason(e.target.value)} placeholder="Masalan: shifokor ko‘rigida bo‘ldi" />
+          </label>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button type="button" disabled={excuseBusy} onClick={() => setExcuseTarget(null)} className="rounded-lg border border-neutral-300 px-4 py-2 text-xs font-semibold text-neutral-700">Bekor qilish</button>
+            <button type="submit" disabled={excuseBusy || excuseReason.trim().length < 3} className="rounded-lg bg-blue-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{excuseBusy ? 'Saqlanmoqda…' : 'Saqlash'}</button>
+          </div>
+        </form>
+      </div>}
     </div>
   );
 };
@@ -297,7 +317,7 @@ const EnrollTab: React.FC<{ employees: any[]; onError: (e: string) => void; onFl
         Kiritilgan profil va rasm <b>almashtirilmaguncha o‘chmaydi</b>. Avval xodimdan biometrik ma’lumotga yozma rozilik oling.
         {superAdmin === false && <b className="mt-1 block text-amber-800">Siz super admin emassiz — ro‘yxatni ko‘rasiz, lekin kiritish va o‘zgartirish super admin orqali.</b>}
       </p>
-      <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
+      <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white">
         <table className="min-w-full text-xs">
           <thead className="bg-neutral-50 text-left text-neutral-500"><tr><th className="px-3 py-2">Rasm</th><th className="px-3">Xodim</th><th className="px-3">Lavozim</th><th className="px-3">Face ID</th><th /></tr></thead>
           <tbody className="divide-y divide-neutral-100">
@@ -424,9 +444,13 @@ const TelegramAccountsCard: React.FC<{ onError: (e: string) => void; onFlash: (t
   return (
     <div className="lg:col-span-2 space-y-3 rounded-2xl border border-violet-200 bg-white p-4 text-xs">
       <h3 className="text-sm font-bold">Xodimlarning Telegram hisoblari (dumaloq video uchun)</h3>
-      <p className="text-[11px] text-neutral-500">Botni guruhda <b>admin</b> qiling, xodimning Telegram ID sini unga biriktiring va “Admin sozlamalari”dagi ish guruhi qatoriga Telegram guruh ID sini kiriting. Kunning birinchi dumaloq videosi ish boshlanishi bo‘ladi.</p>
-      {!v.bot_username && <p className="rounded-lg bg-amber-50 p-2 text-[11px] text-amber-900">Avval xodimlar botini ulang: Sozlamalar → Telegram botlar → “Xodimlarga shaxsiy eslatmalar”.</p>}
+      <p className="text-[11px] text-neutral-500">Ulash tartibi: <b>1)</b> botni saqlang va davomatni yoqing; <b>2)</b> guruh ID ni xodim qatoriga yozing; <b>3)</b> botni guruhga admin qiling; <b>4)</b> xodim Telegram ID sini biriktiring. “Ish boshlash”da Telegram video tanlangan bo‘lsin.</p>
+      {!v.poller_enabled && <p className="rounded-lg bg-red-50 p-2 text-[11px] font-semibold text-red-800">Bu serverda Telegram tinglash o‘chirilgan. Bot sozlamalari saqlanadi, lekin yangi xabarlar olinmaydi. Server ishga tushishida bot scheduler yoqilishi kerak.</p>}
+      {!v.bot_username && <p className="rounded-lg bg-amber-50 p-2 text-[11px] text-amber-900">Bu serverda ishlaydigan Telegram bot tokeni topilmadi. Sozlamalar → Telegram botlar → “Sozlash”da tokenni qayta kiriting, davomatni yoqing va saqlang. Keyin botni faqat bitta ishga tushgan server tinglasin.</p>}
+      {v.polling_error && <p className="rounded-lg bg-red-50 p-2 text-[11px] text-red-800">Bot Telegram guruhlarini o‘qiy olmayapti: {v.polling_error}. Botni guruhga admin qiling yoki @BotFather → /setprivacy → Disable qiling. Bot sozlamasidagi “Sinov xabari” ham polling/webhook holatini aniqlaydi.</p>}
       {v.bot_username && !v.checkin_group && <p className="rounded-lg bg-amber-50 p-2 text-[11px] text-amber-900">Admin sozlamalarida ish guruhi uchun Telegram ID kiriting va botni shu guruhga admin qilib qo‘shing.</p>}
+      {v.poller_enabled && v.last_poll_at && <p className="rounded-lg bg-emerald-50 p-2 text-[11px] text-emerald-800">Bot serverda ishlayapti · oxirgi ulanish tekshiruvi {ago(v.last_poll_at)}.</p>}
+      {v.last_update && <p className={`rounded-lg p-2 text-[11px] ${v.last_update.checkin_group ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-900'}`}><b>Telegram’dan oxirgi kelgan xabar:</b> {v.last_update.kind} · {v.last_update.sender} · {v.last_update.chat} · {ago(v.last_update.at)}{v.last_update.checkin_result ? ` · ${v.last_update.checkin_result}` : ''}</p>}
       <div className="rounded-xl bg-violet-50/60 p-3">
         <div className="flex items-center justify-between">
           <p className="font-semibold">Guruhda video tashlagan, hali biriktirilmaganlar</p>
@@ -540,6 +564,10 @@ const SettingsTab: React.FC<{ employees: any[]; onError: (e: string) => void; on
   const [superAdmin, setSuperAdmin] = useState(false);
   const [zoneBusy, setZoneBusy] = useState(false);
   const [checkinBusy, setCheckinBusy] = useState(false);
+  const [workBusy, setWorkBusy] = useState(false);
+  const [dayStartEmployee, setDayStartEmployee] = useState('');
+  const [dayStartDate, setDayStartDate] = useState(localToday());
+  const [dayStartTime, setDayStartTime] = useState('10:00');
   const [zoneMsg, setZoneMsg] = useState<{ ok: boolean; text: string } | null>(null);
   useEffect(() => {
     api.attendance.settings().then(r => setS(r.settings)).catch(e => onError(e.message));
@@ -557,7 +585,32 @@ const SettingsTab: React.FC<{ employees: any[]; onError: (e: string) => void; on
   };
   const sch = s.default_schedule;
   const setSch = (patch: any) => setS({ ...s, default_schedule: { ...sch, ...patch } });
-  const save = async () => { try { const r = await api.attendance.saveSettings(s); setS(r.settings); onFlash('Sozlamalar saqlandi.'); } catch (e: any) { onError(e.message); } };
+  const save = async () => {
+    setWorkBusy(true);
+    try {
+      const r = await api.attendance.saveSettings({ ...s, groups: groups.map(g => ({ ...g, end: g.end || '18:00' })) });
+      setS(r.settings); onFlash('Sozlamalar saqlandi.');
+    } catch (e: any) { onError(e.message); } finally { setWorkBusy(false); }
+  };
+  const saveWorkSettings = async () => {
+    setWorkBusy(true);
+    try {
+      const r = await api.attendance.saveSettings({
+        groups: groups.map(g => ({ ...g, end: g.end || '18:00' })),
+        employee_groups: s.employee_groups || {}, employee_methods: s.employee_methods || {},
+        checkin_employee_groups: s.checkin_employee_groups || {}, employee_start_times: s.employee_start_times || {},
+        employee_day_start_times: s.employee_day_start_times || {}, agent_links: s.agent_links || {}
+      });
+      setS(r.settings); onFlash('Ish guruhlari va agent vaqtlari saqlandi.');
+    } catch (e: any) { onError(e.message); } finally { setWorkBusy(false); }
+  };
+  const setEmployeeDayStart = (employeeId: string, date: string, start: string) => {
+    const all = { ...(s.employee_day_start_times || {}) };
+    const dates = { ...(all[employeeId] || {}) };
+    if (start) dates[date] = start; else delete dates[date];
+    if (Object.keys(dates).length) all[employeeId] = dates; else delete all[employeeId];
+    setS({ ...s, employee_day_start_times: all });
+  };
   const saveCheckinGroups = async () => {
     setCheckinBusy(true);
     try {
@@ -659,7 +712,7 @@ const SettingsTab: React.FC<{ employees: any[]; onError: (e: string) => void; on
             <label className="col-span-2 md:col-span-3">Guruh<input className={input} value={g.name} onChange={e => setGroup(i, { name: e.target.value })} /></label>
             <label className="md:col-span-2">Start dan<input type="time" className={input} value={g.start_from} onChange={e => setGroup(i, { start_from: e.target.value })} /></label>
             <label className="md:col-span-2">… gacha (kech emas)<input type="time" className={input} value={g.start_to} onChange={e => setGroup(i, { start_to: e.target.value })} /></label>
-            <label className="md:col-span-1">Tugashi<input type="time" className={input} value={g.end} onChange={e => setGroup(i, { end: e.target.value })} /></label>
+            <label className="md:col-span-1">Tugashi<input type="time" className={input} value={g.end || '18:00'} onChange={e => setGroup(i, { end: e.target.value })} /></label>
             <label className="col-span-2 md:col-span-3">Ish boshlash qayerdan
               <select className={input} value={g.source} onChange={e => setGroup(i, { source: e.target.value })}>
                 <option value="FACE_ID">Face ID bilan kelish</option><option value="TELEGRAM_VIDEO">Telegram guruhiga dumaloq video</option><option value="SALESDOC_VISIT">Ulangan tizimdagi birinchi vizit ({systemName})</option>
@@ -674,13 +727,13 @@ const SettingsTab: React.FC<{ employees: any[]; onError: (e: string) => void; on
         <h4 className="pt-2 font-bold">Xodimlar qaysi guruhda</h4>
         <div className="overflow-x-auto">
           <table className="min-w-full">
-            <thead className="text-left text-neutral-500"><tr><th className="py-1">Xodim</th><th>Guruh</th><th>Ish boshlashni qanday belgilaydi</th><th>Shaxsiy boshlanish vaqti</th><th>{systemName}dagi agenti (vizitlar uchun)</th></tr></thead>
+            <thead className="text-left text-neutral-500"><tr><th className="py-1">Xodim</th><th>Ish guruhi</th><th>Ish boshlashi</th><th>Telegram guruhi ID (alohida bo‘lsa)</th><th>Shaxsiy vaqt</th><th>{systemName}dagi agenti</th></tr></thead>
             <tbody className="divide-y divide-neutral-100">
               {employees.filter(e => e.status !== 'INACTIVE').map(e => {
                 const gid = s.employee_groups?.[e.id] || '';
                 const g = groups.find(x => x.id === gid);
                 const method = s.employee_methods?.[e.id] || '';
-                const source = method || g?.source || 'FACE_ID';
+                const source = method || g?.source || (s.checkin_employee_groups?.[e.id] ? 'TELEGRAM_VIDEO' : 'FACE_ID');
                 return (
                   <tr key={e.id}>
                     <td className="py-1.5 pr-2 font-semibold">{e.full_name}<div className="text-[10px] font-normal text-neutral-400">{e.position}</div></td>
@@ -699,6 +752,7 @@ const SettingsTab: React.FC<{ employees: any[]; onError: (e: string) => void; on
                         <option value="SALESDOC_VISIT">Birinchi vizit ({systemName})</option>
                       </select>
                     </td>
+                    <td className="pr-2"><input className={`${input} min-w-36 font-mono`} value={s.checkin_employee_groups?.[e.id] || ''} placeholder="-100… (ixtiyoriy)" onChange={ev => setS({ ...s, checkin_employee_groups: { ...(s.checkin_employee_groups || {}), [e.id]: ev.target.value.trim() }, ...(!method && ev.target.value.trim() ? { employee_methods: { ...(s.employee_methods || {}), [e.id]: 'TELEGRAM_VIDEO' } } : {}) })} /></td>
                     <td className="pr-2"><input type="time" className={input} title="Bo‘sh qoldirilsa, ish guruhi vaqti ishlaydi" value={s.employee_start_times?.[e.id] || ''} onChange={ev => {
                       const starts = { ...(s.employee_start_times || {}) };
                       if (ev.target.value) starts[e.id] = ev.target.value; else delete starts[e.id];
@@ -718,13 +772,47 @@ const SettingsTab: React.FC<{ employees: any[]; onError: (e: string) => void; on
             </tbody>
           </table>
         </div>
+        <div className="space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+          <h4 className="font-bold">Agent uchun ayrim kunlarda kechroq boshlash</h4>
+          <p className="text-[11px] text-neutral-600">Tanlangan sanada faqat shu xodimning kechikish muddati o‘zgaradi. Boshqa kunlar va guruh jadvali o‘z holida qoladi. Faqat admin saqlay oladi.</p>
+          <div className="grid gap-2 sm:grid-cols-[1fr_180px_130px_auto] sm:items-end">
+            <label>Xodim / agent
+              <select className={input} value={dayStartEmployee} onChange={e => setDayStartEmployee(e.target.value)}>
+                <option value="">Xodimni tanlang…</option>
+                {employees.filter(e => e.status !== 'INACTIVE').map(e => <option key={e.id} value={e.id}>{e.full_name}{e.position ? ` · ${e.position}` : ''}</option>)}
+              </select>
+            </label>
+            <label>Sana<input type="date" className={input} value={dayStartDate} onChange={e => setDayStartDate(e.target.value)} /></label>
+            <label>Ish boshlashi<input type="time" className={input} value={dayStartTime} onChange={e => setDayStartTime(e.target.value)} /></label>
+            <button type="button" disabled={!dayStartEmployee || !dayStartDate || !dayStartTime} onClick={() => setEmployeeDayStart(dayStartEmployee, dayStartDate, dayStartTime)} className="rounded-lg border border-neutral-300 px-3 py-1.5 font-semibold hover:bg-white disabled:opacity-50">Kunga qo‘shish</button>
+          </div>
+          {Object.entries(s.employee_day_start_times || {}).flatMap(([employeeId, dates]: [string, any]) => Object.entries(dates || {}).map(([date, start]: [string, any]) => ({ employeeId, date, start }))).sort((a, b) => a.date.localeCompare(b.date)).map(row => (
+            <div key={`${row.employeeId}-${row.date}`} className="grid gap-2 rounded-lg border border-neutral-100 bg-white p-2 sm:grid-cols-[1fr_180px_130px_auto] sm:items-end">
+              <span className="font-semibold">{employees.find(e => e.id === row.employeeId)?.full_name || 'Xodim'}</span>
+              <label className="text-[10px] text-neutral-500">Sana<input type="date" className={input} value={row.date} onChange={e => {
+                const all = { ...(s.employee_day_start_times || {}) };
+                const dates = { ...(all[row.employeeId] || {}) };
+                delete dates[row.date];
+                if (e.target.value) dates[e.target.value] = row.start;
+                if (Object.keys(dates).length) all[row.employeeId] = dates; else delete all[row.employeeId];
+                setS({ ...s, employee_day_start_times: all });
+              }} /></label>
+              <label className="text-[10px] text-neutral-500">Boshlanishi<input type="time" className={input} value={row.start} onChange={e => setEmployeeDayStart(row.employeeId, row.date, e.target.value)} /></label>
+              <button type="button" onClick={() => setEmployeeDayStart(row.employeeId, row.date, '')} className="rounded-lg p-2 text-neutral-400 hover:bg-red-50 hover:text-red-600" title="Kunlik o‘zgarishni olib tashlash"><Trash2 className="h-4 w-4" /></button>
+            </div>
+          ))}
+        </div>
         <p className="text-[11px] text-neutral-500">Yangi guruh avval saqlanadi, keyin xodimlarga biriktiriladi. Agentlarning vizitlari har 10 daqiqada ulangan tizimdan ({systemName}) olinadi.</p>
-        <p className="text-[11px] text-amber-800">Shaxsiy boshlanish vaqti admin tomonidan qo‘yiladi. Bo‘sh bo‘lsa, guruh vaqti amal qiladi. Saqlash pastdagi tugma orqali.</p>
+        <p className="text-[11px] text-amber-800">Shaxsiy boshlanish vaqti doimiy; yuqoridagi kunlik sozlama esa faqat ko‘rsatilgan sanaga tegishli.</p>
         {!visitsAvailable && <p className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-900">{systemName} hozircha agent vizitlarini bermaydi — “birinchi vizit” guruhidagi agentlar uchun ish boshlanishi olinmaydi. Ularni Face ID guruhiga o‘tkazing.</p>}
+        <div className="flex justify-end border-t border-neutral-100 pt-3">
+          <button type="button" disabled={workBusy} onClick={saveWorkSettings} className="rounded-lg bg-emerald-600 px-4 py-2 font-bold text-white hover:bg-emerald-700 disabled:opacity-50">{workBusy ? 'Saqlanmoqda…' : 'Ish jadvalini saqlash'}</button>
+        </div>
       </div>
 
-      <div className="lg:col-span-2 space-y-3 rounded-2xl border border-violet-200 bg-white p-4 text-xs">
-        <h3 className="text-sm font-bold">Dumaloq video uchun Telegram guruh IDlari</h3>
+      <details className="lg:col-span-2 rounded-2xl border border-violet-200 bg-white p-4 text-xs">
+        <summary className="cursor-pointer text-sm font-bold">Dostavchi/ombor umumiy guruhi sozlamasi (ixtiyoriy)</summary>
+        <div className="mt-3 space-y-3">
         <p className="text-[11px] text-neutral-600">Har bir ish guruhiga o‘z Telegram guruhining ID sini kiriting (odatda <b>-100…</b> bilan boshlanadi). Botni o‘sha guruhga admin qilib qo‘shing. Video faqat xodim biriktirilgan ish guruhining ID sidan yuborilsa qabul qilinadi. Yangi ish guruhini avval yuqoridagi umumiy “Saqlash” tugmasi bilan saqlang.</p>
         {!groups.some(g => g.id) && <p className="rounded-lg bg-amber-50 p-2 text-[11px] text-amber-900">Avval ish guruhini qo‘shib, saqlang.</p>}
         <div className="grid gap-2 sm:grid-cols-2">
@@ -736,7 +824,8 @@ const SettingsTab: React.FC<{ employees: any[]; onError: (e: string) => void; on
           <button disabled={checkinBusy || !groups.some(g => g.id)} onClick={saveCheckinGroups} className="rounded-lg bg-neutral-900 px-3 py-1.5 font-semibold text-white disabled:opacity-50">{checkinBusy ? 'Saqlanmoqda…' : 'Video guruhlarini saqlash'}</button>
           <span className="text-[10px] text-neutral-500">ID ni Telegram guruhini admin ko‘radigan botga qo‘shib, bot yozuvlarini qabul qilgach olish mumkin.</span>
         </div>
-      </div>
+        </div>
+      </details>
 
       <SheetsCard onError={onError} onFlash={onFlash} />
       <TelegramAccountsCard onError={onError} onFlash={onFlash} />
@@ -799,7 +888,7 @@ const SettingsTab: React.FC<{ employees: any[]; onError: (e: string) => void; on
         </label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={s.store_photos} onChange={e => setS({ ...s, store_photos: e.target.checked })} />Har qaydning kichik suratini saqlash (nizolar uchun)</label>
       </div>
-      <div className="lg:col-span-2 flex justify-end"><button onClick={save} className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white hover:bg-emerald-700">Saqlash</button></div>
+      <div className="lg:col-span-2 flex justify-end"><button disabled={workBusy} onClick={save} className="rounded-xl bg-emerald-600 px-5 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">{workBusy ? 'Saqlanmoqda…' : 'Barcha sozlamalarni saqlash'}</button></div>
     </div>
   );
 };

@@ -476,6 +476,9 @@ export interface OutOfStockLostProfitItem {
   daily_sales_avg: number;            // daily sales while the product was in stock
   days_out_of_stock: number | null;   // null: date unknown (never sold, never seen in stock)
   out_of_stock_since: string | null;
+  zero_stock_observed_at?: string | null;
+  stock_observed_at?: string | null;
+  estimate_status?: 'ESTIMATED' | 'STOCKOUT_DATE_UNKNOWN' | 'NO_DEMAND_DATA' | 'PRICE_UNKNOWN';
   last_sale_date: string | null;
   lost_units: number;
   lost_sales_uzs: number;
@@ -485,9 +488,9 @@ export interface OutOfStockLostProfitItem {
 
 /** "12 kundan beri" / "Bugun tugagan" / "Sanasi noma'lum" for a stock-out row. */
 export function stockOutLabel(item: { days_out_of_stock: number | null }): string {
-  if (item.days_out_of_stock === null || item.days_out_of_stock === undefined) return 'Sanasi noma’lum';
-  if (item.days_out_of_stock === 0) return 'Bugun tugagan';
-  return `${item.days_out_of_stock} kundan beri`;
+  if (item.days_out_of_stock === null || item.days_out_of_stock === undefined) return '0 qoldiq sanasi aniqlanmagan';
+  if (item.days_out_of_stock === 0) return 'Bugun 0 qoldiq tasdiqlangan';
+  return `0 qoldiq ${item.days_out_of_stock} kun oldin tasdiqlangan`;
 }
 
 export interface StockRunRateResponse {
@@ -517,6 +520,7 @@ export interface OutOfStockResponse {
     total_lost_profit_uzs: number;
     profit_unknown_count?: number; // products whose purchase cost is unknown: their lost profit is not counted
     since_unknown_count?: number;
+    estimate_unknown_count?: number;
     window_days?: number;
   };
   items: OutOfStockLostProfitItem[];

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Network, 
   RefreshCw, 
@@ -68,6 +68,9 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
   const [loading, setLoading] = useState(true);
   const [syncingProvider, setSyncingProvider] = useState<string | null>(null);
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
+  const [settingPrimaryId, setSettingPrimaryId] = useState<string | null>(null);
+  const [deletingIntegrationId, setDeletingIntegrationId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<IntegrationRecord | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string; showReportsLink?: boolean } | null>(null);
 
   // SalesDoctor API Doc Modal State
@@ -82,9 +85,12 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
   const [isModalTesting, setIsModalTesting] = useState<boolean>(false);
   const [paymentTypes, setPaymentTypes] = useState<{ SD_id: string; name: string; active: boolean }[]>([]);
   const [paymentTypesError, setPaymentTypesError] = useState<string | null>(null);
+  const [paymentTypesLoading, setPaymentTypesLoading] = useState(false);
   const [priceTypes, setPriceTypes] = useState<{ id: string; name: string; kind: string; active: boolean }[]>([]);
   const [priceTypesUsed, setPriceTypesUsed] = useState<{ sale?: string | null; purchase?: string | null }>({});
   const [priceTypesError, setPriceTypesError] = useState<string | null>(null);
+  const [priceTypesLoading, setPriceTypesLoading] = useState(false);
+  const providerListsRequest = useRef(0);
   const [modalTestResult, setModalTestResult] = useState<{
     ok: boolean;
     message: string;
@@ -201,13 +207,17 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
   const [historyRunning, setHistoryRunning] = useState(false);
   const [historyPoll, setHistoryPoll] = useState(false);
   const withHistory = integrations.filter(i => i.capabilities?.history);
-  const historyRecord = withHistory.find(i => i.status === 'CONNECTED' && !i.disabled) || withHistory.find(i => !i.disabled) || withHistory[0];
+  const activeHistoryRecords = withHistory.filter(i => i.status === 'CONNECTED' && !i.disabled);
+  const historyRecord = activeHistoryRecords.find(i => i.config?.primary === true)
+    || activeHistoryRecords.slice().sort((a, b) => String(b.last_sync_at || '').localeCompare(String(a.last_sync_at || '')))[0]
+    || withHistory.find(i => !i.disabled)
+    || withHistory[0];
   const historyProvider: string | null = historyRecord?.provider_name.toUpperCase() || null;
   const historyName = historyRecord?.system_name || historyProvider || '';
   const loadHistory = async (): Promise<boolean> => {
     if (!historyProvider) return false;
     try {
-      const r = await api.getSalesDocHistoryStatus(historyProvider);
+      const r = await api.getSalesDocHistoryStatus(historyProvider, historyRecord?.id);
       setHistory(r.history);
       setHistoryRunning(!!r.running);
       return !!r.running;
@@ -218,7 +228,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
   useEffect(() => {
     setHistory(null);
     loadHistory().then(running => { if (running) setHistoryPoll(true); });
-  }, [historyProvider]);
+  }, [historyProvider, historyRecord?.id]);
   useEffect(() => {
     if (!historyPoll) return;
     const timer = setInterval(async () => {
@@ -226,42 +236,61 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
       if (!running) { setHistoryPoll(false); fetchIntegrations(); }
     }, 4000);
     return () => clearInterval(timer);
-  }, [historyPoll]);
+  }, [historyPoll, historyProvider, historyRecord?.id]);
 
   const getSavedRecord = (providerName: string): IntegrationRecord | undefined => {
-    return integrations.find(
-      i => i.provider_name.toUpperCase() === providerName.toUpperCase()
-    );
+    const records = integrations.filter(i => i.provider_name.toUpperCase() === providerName.toUpperCase());
+    const enabled = records.filter(i => i.status === 'CONNECTED' && !i.disabled);
+    return enabled.find(i => i.config?.primary === true)
+      || enabled.slice().sort((a, b) => String(b.last_sync_at || '').localeCompare(String(a.last_sync_at || '')))[0]
+      || records[0];
+  };
+
+  const loadProviderLists = async (providerName: string, integrationId?: string) => {
+    // Never fall back to another server when the user is creating a new connection.
+    const requestId = ++providerListsRequest.current;
+    if (!integrationId) return;
+    const record = integrations.find(i => i.id === integrationId && i.provider_name.toUpperCase() === providerName.toUpperCase());
+    const caps = record?.capabilities;
+    setPaymentTypes([]); setPriceTypes([]); setPriceTypesUsed({});
+    setPaymentTypesError(null); setPriceTypesError(null);
+    setPaymentTypesLoading(!!caps?.paymentTypes);
+    setPriceTypesLoading(!!caps?.priceTypes);
+    const jobs: Promise<void>[] = [];
+    if (caps?.paymentTypes) jobs.push(api.getSalesDocPaymentTypes(providerName, integrationId)
+      .then(r => { if (providerListsRequest.current === requestId) setPaymentTypes(r.paymentTypes || []); })
+      .catch(err => { if (providerListsRequest.current === requestId) setPaymentTypesError(err.message || 'To‘lov turlari olinmadi.'); })
+      .finally(() => { if (providerListsRequest.current === requestId) setPaymentTypesLoading(false); }));
+    if (caps?.priceTypes) jobs.push(api.getSalesDocPriceTypes(providerName, integrationId)
+      .then(r => { if (providerListsRequest.current === requestId) { setPriceTypes(r.priceTypes || []); setPriceTypesUsed(r.used || {}); } })
+      .catch(err => { if (providerListsRequest.current === requestId) setPriceTypesError(err.message || 'Narx turlari olinmadi.'); })
+      .finally(() => { if (providerListsRequest.current === requestId) setPriceTypesLoading(false); }));
+    await Promise.all(jobs);
   };
 
   // Open Configuration Modal
   const handleOpenConfig = async (sys: any, record?: IntegrationRecord, createNew = false) => {
     setSelectedSystem(sys);
-    // Lists come from whichever system is being set up, if it can give them.
-    const caps = record?.capabilities || getSavedRecord(sys.provider_name)?.capabilities;
-    setPaymentTypes([]);
-    setPaymentTypesError(null);
-    if (caps?.paymentTypes) api.getSalesDocPaymentTypes(sys.provider_name, record?.id)
-      .then(r => setPaymentTypes(r.paymentTypes || []))
-      .catch(err => setPaymentTypesError(err.message || 'xato'));
-    setPriceTypes([]);
-    setPriceTypesError(null);
-    if (caps?.priceTypes) api.getSalesDocPriceTypes(sys.provider_name, record?.id)
-      .then(r => { setPriceTypes(r.priceTypes || []); setPriceTypesUsed(r.used || {}); })
-      .catch(err => setPriceTypesError(err.message || 'xato'));
+    const selectedRecord = record || (!createNew ? getSavedRecord(sys.provider_name) : undefined);
+    // A new connection has no server-side record yet. Do not silently show lists from another connection.
+    providerListsRequest.current++;
+    setPaymentTypes([]); setPriceTypes([]); setPriceTypesUsed({});
+    setPaymentTypesError(null); setPriceTypesError(null);
+    setPaymentTypesLoading(false); setPriceTypesLoading(false);
+    if (selectedRecord?.id) void loadProviderLists(sys.provider_name, selectedRecord.id);
     setModalTestResult(null);
     setShowPassword(false);
     setShowToken(false);
 
     try {
-      const res = createNew ? null : await api.getIntegrationConfig(sys.provider_name, record?.id);
+      const res = createNew ? null : await api.getIntegrationConfig(sys.provider_name, selectedRecord?.id);
       if (res && res.configured && res.config) {
         const c = res.config;
         setConfigForm({
           forecast_days:c.forecast_days||100,order_date_field:c.order_date_field||'date',payment_cash_id:c.payment_cash_id||'',payment_terminal_id:c.payment_terminal_id||'',
           sale_price_type_id:c.sale_price_type_id||'',sale_price_type_ids:c.sale_price_type_ids||(c.sale_price_type_id?[c.sale_price_type_id]:[]),purchase_price_type_id:c.purchase_price_type_id||'',
           provider_name: sys.provider_name,
-          integration_id: record?.id,
+          integration_id: selectedRecord?.id,
           connection_name: c.connection_name || '',
           auth_type: c.auth_type || 'API_TOKEN',
           server_url: c.server_url || sys.defaultUrl,
@@ -372,6 +401,39 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
       setStatusMessage({ type: 'error', text: err.message || 'Holatni o‘zgartirib bo‘lmadi' });
     } finally {
       setTogglingProvider(null);
+    }
+  };
+
+  const handleDeleteIntegration = async (record: IntegrationRecord) => {
+    setDeletingIntegrationId(record.id);
+    setStatusMessage(null);
+    try {
+      const res = await api.deleteIntegration(record.id);
+      setStatusMessage({ type: 'success', text: res.message });
+      setDeleteTarget(null);
+      refreshDistribution();
+      await fetchIntegrations();
+      if (onRefresh) onRefresh();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Server ulanishini o‘chirib bo‘lmadi' });
+    } finally {
+      setDeletingIntegrationId(null);
+    }
+  };
+
+  const handleSetPrimary = async (providerName: string, integrationId: string) => {
+    setSettingPrimaryId(integrationId);
+    setStatusMessage(null);
+    try {
+      const res = await api.setPrimaryIntegration(providerName, integrationId);
+      setStatusMessage({ type: 'success', text: res.message });
+      refreshDistribution();
+      await fetchIntegrations();
+      if (onRefresh) onRefresh();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Asosiy serverni almashtirib bo‘lmadi' });
+    } finally {
+      setSettingPrimaryId(null);
     }
   };
 
@@ -585,13 +647,14 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
       </div>
 
       {/* SYSTEMS INTEGRATION CARDS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <p className="rounded-xl border border-blue-100 bg-blue-50 p-3 text-xs text-blue-900">Bir nechta yoqilgan server avtomatik ravishda alohida sinxronlanadi. <b>Faol server</b> kassada va standart integratsiya amallarida ishlatiladigan asosiy ulanishni bildiradi; serverlar ro‘yxatidan qaysi birini ishlatishni tanlang.</p>
+      <div className="grid min-w-0 grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
         {systems.map(sys => {
           const isSyncing = syncingProvider === sys.provider_name;
           const isTesting = testingProvider === sys.provider_name;
           const saved = getSavedRecord(sys.provider_name);
           const serverRecords = integrations.filter(i => i.provider_name.toUpperCase() === sys.provider_name.toUpperCase());
-          const isConnected = saved?.status === 'CONNECTED';
+          const isConnected = saved?.status === 'CONNECTED' && !saved?.disabled;
           const authType = saved?.config?.auth_type || 'API_TOKEN';
 
           return (
@@ -635,12 +698,19 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
 
                 {serverRecords.length > 0 && <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3 text-xs">
                   <div className="mb-1 font-bold text-indigo-900">Ulangan serverlar ({serverRecords.length})</div>
-                  {serverRecords.map((record: any) => <div key={record.id} className="flex items-center justify-between gap-2 border-t border-indigo-100 py-1.5">
-                    <span className="truncate">{record.config?.connection_name || record.system_name || record.provider_name} · {record.config?.server_url || 'server manzili'}</span>
-                    <span className="flex shrink-0 gap-2"><button type="button" className="font-semibold text-indigo-700 hover:underline" onClick={() => handleOpenConfig(sys, record)}>Tahrirlash</button>
-                    <button type="button" className="font-semibold text-amber-700 hover:underline" onClick={() => handleToggleEnabled(sys.provider_name, !!record.disabled, record.id)}>{record.disabled ? 'Yoqish' : 'O‘chirish'}</button>
-                    <button type="button" className="font-semibold text-emerald-700 hover:underline" onClick={() => handleSync(sys.provider_name, record.id)}>Sinxronlash</button></span>
-                  </div>)}
+                  {serverRecords.map((record: any) => {
+                    const isPrimary = saved?.id === record.id && record.status === 'CONNECTED' && !record.disabled;
+                    return <div key={record.id} className="flex min-w-0 flex-col gap-2 border-t border-indigo-100 py-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="min-w-0 break-words">{record.config?.connection_name || record.system_name || record.provider_name} · {record.config?.server_url || 'server manzili'}{isPrimary && <b className="ml-2 text-emerald-700">Faol server</b>}</span>
+                      <span className="flex min-w-0 flex-wrap gap-x-3 gap-y-2 text-left">
+                        <button type="button" className="font-semibold text-indigo-700 hover:underline" onClick={() => handleOpenConfig(sys, record)}>Tahrirlash</button>
+                        <button type="button" disabled={togglingProvider === sys.provider_name} className="font-semibold text-amber-700 hover:underline disabled:opacity-50" onClick={() => handleToggleEnabled(sys.provider_name, !!record.disabled, record.id)}>{record.disabled ? 'Yoqish' : 'Vaqtincha o‘chirish'}</button>
+                        <button type="button" disabled={syncingProvider === sys.provider_name} className="font-semibold text-emerald-700 hover:underline disabled:opacity-50" onClick={() => handleSync(sys.provider_name, record.id)}>Sinxronlash</button>
+                        {record.status === 'CONNECTED' && !record.disabled && !isPrimary && <button type="button" disabled={settingPrimaryId === record.id} className="font-semibold text-violet-700 hover:underline disabled:opacity-50" onClick={() => handleSetPrimary(sys.provider_name, record.id)}>{settingPrimaryId === record.id ? 'Almashtirilmoqda…' : 'Faol qilish'}</button>}
+                        <button type="button" disabled={!!deletingIntegrationId} className="font-semibold text-red-700 hover:underline disabled:opacity-50" onClick={() => setDeleteTarget(record)}>Butunlay o‘chirish</button>
+                      </span>
+                    </div>;
+                  })}
                 </div>}
 
                 <div className="mt-3">
@@ -710,7 +780,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
               </div>
 
               {/* Action Buttons */}
-              <div className="pt-3 border-t border-neutral-100 flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 border-t border-neutral-100 pt-3">
                 <button type="button" onClick={() => handleOpenConfig(sys, undefined, true)} className="py-2 px-3 text-xs font-semibold text-indigo-700 border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 rounded-xl">+ Server qo‘shish</button>
                 <button
                   type="button"
@@ -775,8 +845,8 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
 
       {/* MODAL: Integration Settings & Server Cabinet Credentials */}
       {showConfigModal && selectedSystem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-xs">
+          <div className="w-full max-w-xl max-h-[94vh] overflow-y-auto rounded-2xl bg-white p-4 sm:p-6 shadow-2xl">
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-neutral-200 pb-3">
               <div className="flex items-center gap-2.5">
@@ -801,8 +871,8 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
             </div>
 
             <form onSubmit={handleSaveConfig} className="mt-4 space-y-4">
-              <label className="block text-xs font-semibold text-neutral-700">Server nomi (masalan: Toshkent, 2-server)
-                <input type="text" className="mt-1 w-full rounded-lg border border-neutral-300 p-2" placeholder="Ulanish nomi" value={configForm.connection_name || ''} onChange={e => setConfigForm(p => ({...p, connection_name: e.target.value}))} />
+              <label className="block text-xs font-semibold text-neutral-700">Server nomi (masalan: Toshkent, 2-server){!configForm.integration_id && <span className="text-red-500"> *</span>}
+                <input type="text" required={!configForm.integration_id} className="mt-1 w-full rounded-lg border border-neutral-300 p-2" placeholder="Masalan: Toshkent" value={configForm.connection_name || ''} onChange={e => setConfigForm(p => ({...p, connection_name: e.target.value}))} />
               </label>
               {/* Authentication Type Switcher (2 Tabs) */}
               <div>
@@ -991,49 +1061,50 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
 
               {(() => {
                 // The same settings for any distribution system; each part appears only if that system can do it.
-                const rec = getSavedRecord(configForm.provider_name);
+                const rec = (configForm.integration_id && integrations.find(i => i.id === configForm.integration_id)) || getSavedRecord(configForm.provider_name);
                 const caps = rec?.capabilities;
                 const sysName = rec?.system_name || (configForm.provider_name === 'SALESDOC' ? 'SalesDoctor' : configForm.provider_name);
                 if (!caps && configForm.provider_name !== 'SALESDOC') return null;
                 const showPayments = !caps || caps.paymentTypes;
                 const showPrices = !caps || caps.priceTypes;
                 return <div className="grid gap-3 rounded-xl border p-4">
-                {(!caps || caps.history) && <label>Tarix boshlanish sanasi (bo'sh = avtomatik topiladi)<input type="date" className="border rounded p-2 ml-2" value={configForm.history_start_date||''} onChange={e=>setConfigForm(p=>({...p,history_start_date:e.target.value}))}/></label>}
-                <label>Prognoz davri (kalendar kun)<input type="number" min="1" max="3660" className="border rounded p-2 ml-2" value={configForm.forecast_days||100} onChange={e=>setConfigForm(p=>({...p,forecast_days:Number(e.target.value)}))}/></label>
-                <label>Kassa buyurtmasi sanasi<select className="border rounded p-2 ml-2" value={configForm.order_date_field||'date'} onChange={e=>setConfigForm(p=>({...p,order_date_field:e.target.value}))}><option value="date">Buyurtma sanasi</option><option value="dateLoad">Hujjat sanasi</option></select></label>
+                {(!caps || caps.history) && <label className="grid gap-1 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">Tarix boshlanish sanasi (bo‘sh = avtomatik topiladi)<input type="date" className="w-full min-w-0 border rounded p-2 sm:w-auto" value={configForm.history_start_date||''} onChange={e=>setConfigForm(p=>({...p,history_start_date:e.target.value}))}/></label>}
+                <label className="grid gap-1 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">Prognoz davri (kalendar kun)<input type="number" min="1" max="3660" className="w-full min-w-0 border rounded p-2 sm:w-32" value={configForm.forecast_days||100} onChange={e=>setConfigForm(p=>({...p,forecast_days:Number(e.target.value)}))}/></label>
+                <label className="grid gap-1 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">Kassa buyurtmasi sanasi<select className="w-full min-w-0 border rounded p-2 sm:w-auto" value={configForm.order_date_field||'date'} onChange={e=>setConfigForm(p=>({...p,order_date_field:e.target.value}))}><option value="date">Buyurtma sanasi</option><option value="dateLoad">Hujjat sanasi</option></select></label>
                 {showPayments && <>
                 {/* Sending a payment needs the system's own payment type; the list comes from the system. */}
-                <label>Kassadagi naqd pul qaysi {sysName} to‘lov turiga yozilsin
-                  <select className="border rounded p-2 ml-2" value={configForm.payment_cash_id||''} onChange={e=>setConfigForm(p=>({...p,payment_cash_id:e.target.value}))}>
-                    <option value="">{paymentTypes.length ? '— tanlang —' : 'Ro‘yxat yuklanmoqda...'}</option>
+                <label className="grid gap-1 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">Kassadagi naqd pul qaysi {sysName} to‘lov turiga yozilsin
+                  <select className="w-full min-w-0 border rounded p-2 sm:w-auto" value={configForm.payment_cash_id||''} onChange={e=>setConfigForm(p=>({...p,payment_cash_id:e.target.value}))}>
+                    <option value="">{paymentTypesLoading ? 'Ro‘yxat yuklanmoqda...' : paymentTypes.length ? '— tanlang —' : 'To‘lov turi topilmadi'}</option>
                     {paymentTypes.map(t => <option key={t.SD_id} value={t.SD_id}>{t.name}{t.active ? '' : ' (nofaol)'} · {t.SD_id}</option>)}
                   </select>
                 </label>
-                <label>Terminal/Click qaysi {sysName} to‘lov turiga yozilsin
-                  <select className="border rounded p-2 ml-2" value={configForm.payment_terminal_id||''} onChange={e=>setConfigForm(p=>({...p,payment_terminal_id:e.target.value}))}>
-                    <option value="">{paymentTypes.length ? '— tanlang —' : 'Ro‘yxat yuklanmoqda...'}</option>
+                <label className="grid gap-1 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">Terminal/Click qaysi {sysName} to‘lov turiga yozilsin
+                  <select className="w-full min-w-0 border rounded p-2 sm:w-auto" value={configForm.payment_terminal_id||''} onChange={e=>setConfigForm(p=>({...p,payment_terminal_id:e.target.value}))}>
+                    <option value="">{paymentTypesLoading ? 'Ro‘yxat yuklanmoqda...' : paymentTypes.length ? '— tanlang —' : 'To‘lov turi topilmadi'}</option>
                     {paymentTypes.map(t => <option key={t.SD_id} value={t.SD_id}>{t.name}{t.active ? '' : ' (nofaol)'} · {t.SD_id}</option>)}
                   </select>
                 </label>
-                {paymentTypesError && <p className="text-xs text-red-600">To‘lov turlari olinmadi: {paymentTypesError}</p>}
+                {paymentTypesError && <p className="text-xs text-red-600">To‘lov turlari olinmadi: {paymentTypesError} <button type="button" className="ml-1 underline font-semibold" onClick={() => void loadProviderLists(configForm.provider_name, configForm.integration_id)}>Qayta yuklash</button></p>}
                 <p className="text-xs">To‘lov turi tanlanmasa buyurtmaning {sysName}dagi turi ishlatiladi. Faqat {sysName} qabul qilgan to‘lov “tasdiqlandi” deb belgilanadi.</p>
                 </>}
-                {caps && !caps.payments && <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-900">{sysName} hozircha kassadan to‘lov qabul qilmaydi — kassa to‘lovlari faqat shu dasturda saqlanadi.</p>}
+                {caps && !caps.payments && <p className="rounded-lg bg-amber-50 p-2 text-xs text-amber-900">{sysName} to‘lov turlarini tanlashga ruxsat beradi, ammo kassadan {sysName}ga to‘lov yuborish amali hali qo‘llab-quvvatlanmaydi. Kassa yozuvlari bu dasturda saqlanadi.</p>}
                 {/* Prices: every price type is imported as is; these two say which is "sotuv narxi" and which "tannarx". */}
                 {showPrices && <>
                 <fieldset className="rounded-lg border border-neutral-200 p-3">
                   <legend className="px-1 text-sm font-semibold">Sotuv narxlari — bir nechta tur tanlash mumkin</legend>
                   <p className="mb-2 text-xs text-neutral-500">Tanlangan narx turlari mahsulotlarda alohida ko‘rinadi. Birinchi tanlangan tur asosiy sotuv narxi bo‘ladi.</p>
                   {priceTypes.filter(t => t.kind === 'sale').map(t => <label key={t.id} className="flex items-center gap-2 py-1 text-sm"><input type="checkbox" checked={(configForm.sale_price_type_ids || (configForm.sale_price_type_id ? [configForm.sale_price_type_id] : [])).includes(t.id)} onChange={e => setConfigForm(p => { const old = p.sale_price_type_ids || (p.sale_price_type_id ? [p.sale_price_type_id] : []); const next = e.target.checked ? [...old, t.id] : old.filter(id => id !== t.id); return { ...p, sale_price_type_ids: next, sale_price_type_id: next[0] || '' }; })} />{t.name}{t.active ? '' : ' (nofaol)'} · {t.id}</label>)}
-                  {!priceTypes.some(t => t.kind === 'sale') && <p className="text-xs text-neutral-500">{priceTypes.length ? 'Sotuv narxi turi topilmadi.' : 'Narx turlari yuklanmoqda...'}</p>}
+                  {!priceTypes.some(t => t.kind === 'sale') && <p className="text-xs text-neutral-500">{priceTypesLoading ? 'Narx turlari yuklanmoqda...' : priceTypes.length ? 'Sotuv narxi turi topilmadi.' : 'Narx turlari topilmadi.'}</p>}
                 </fieldset>
-                <label>Kirim narxi (tannarx) — {sysName} narx turi
-                  <select className="border rounded p-2 ml-2" value={configForm.purchase_price_type_id||''} onChange={e=>setConfigForm(p=>({...p,purchase_price_type_id:e.target.value}))}>
-                    <option value="">{priceTypes.length ? `Avtomatik${priceTypesUsed.purchase ? ` (${priceTypes.find(t => t.id === priceTypesUsed.purchase)?.name})` : ' — topilmadi'}` : 'Ro‘yxat yuklanmoqda...'}</option>
+                <label className="grid gap-1 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">Kirim narxi (tannarx) — {sysName} narx turi
+                  <select className="w-full min-w-0 border rounded p-2 sm:w-auto" value={configForm.purchase_price_type_id||''} onChange={e=>setConfigForm(p=>({...p,purchase_price_type_id:e.target.value}))}>
+                    <option value="">{priceTypesLoading ? 'Ro‘yxat yuklanmoqda...' : priceTypes.length ? `Avtomatik${priceTypesUsed.purchase ? ` (${priceTypes.find(t => t.id === priceTypesUsed.purchase)?.name})` : ' — topilmadi'}` : 'Narx turi topilmadi'}</option>
                     {priceTypes.map(t => <option key={t.id} value={t.id}>{t.name}{t.active ? '' : ' (nofaol)'} · {t.id}</option>)}
                   </select>
                 </label>
-                {priceTypesError && <p className="text-xs text-red-600">Narx turlari olinmadi: {priceTypesError}</p>}
+                {priceTypesError && <p className="text-xs text-red-600">Narx turlari olinmadi: {priceTypesError} <button type="button" className="ml-1 underline font-semibold" onClick={() => void loadProviderLists(configForm.provider_name, configForm.integration_id)}>Qayta yuklash</button></p>}
+                {!configForm.integration_id && <p className="rounded-lg bg-blue-50 p-2 text-xs text-blue-900">Yangi server ma’lumotlari boshqa ulanishdan olinmaydi. Ulanishni saqlab, birinchi sinxronlashni boshlang; keyin aynan shu serverni tahrirlasangiz uning to‘lov va narx turlari yuklanadi.</p>}
                 <p className="text-xs">Barcha narx turlari {sysName}dagidek olinadi va Mahsulotlar bo‘limida ko‘rinadi. Bu ikkisi faqat qaysi biri “sotuv narxi” va qaysi biri “tannarx” ekanini belgilaydi. O‘zgarish keyingi sinxronlashda qo‘llanadi.</p>
                 </>}
               </div>;
@@ -1338,6 +1409,16 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
           </div>
         </div>
       )}
+      {deleteTarget && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="delete-integration-title">
+        <div className="w-full max-w-md space-y-3 rounded-2xl bg-white p-4 shadow-2xl sm:p-5">
+          <h3 id="delete-integration-title" className="text-sm font-bold text-neutral-900">Server ulanishini butunlay o‘chirish</h3>
+          <p className="text-xs leading-relaxed text-neutral-600"><b>{deleteTarget.config?.connection_name || deleteTarget.system_name || deleteTarget.provider_name}</b> uchun saqlangan kirish ma’lumotlari o‘chadi. Import tarixi bazada qoladi, lekin bu serverning eski ma’lumotlari ko‘rinmaydi.</p>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button type="button" disabled={deletingIntegrationId === deleteTarget.id} onClick={() => setDeleteTarget(null)} className="rounded-lg border border-neutral-300 px-4 py-2 text-xs font-semibold text-neutral-700">Bekor qilish</button>
+            <button type="button" disabled={deletingIntegrationId === deleteTarget.id} onClick={() => handleDeleteIntegration(deleteTarget)} className="rounded-lg bg-red-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{deletingIntegrationId === deleteTarget.id ? 'O‘chirilmoqda…' : 'Serverni o‘chirish'}</button>
+          </div>
+        </div>
+      </div>}
     </div>
   );
 };

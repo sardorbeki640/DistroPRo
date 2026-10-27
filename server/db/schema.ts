@@ -131,6 +131,7 @@ export interface Employee {
 
 export interface Agent {
   source_integration_id?: string | null; // integration the row came from; hidden while that integration is switched off
+  external_codes?: string[]; // all provider ids for this agent (SalesDoc may expose SD_id and code_1C separately)
   id: string;
   company_id: string;
   user_id?: string | null;
@@ -725,6 +726,8 @@ export interface Product {
   out_of_stock_days?: number;   // legacy, not used: see ForecastService.outOfStockSince
   out_of_stock_date?: string;   // legacy, not used
   last_in_stock_at?: string | null; // last business date an import saw stock > 0
+  zero_stock_observed_at?: string | null; // first date an inventory sync confirmed zero after stock was previously positive
+  stock_observed_at?: string | null; // last date this stock quantity was confirmed by inventory sync/user entry
   min_stock_level?: number;
   source?: 'SALESDOC' | 'SMARTUP' | 'LINKO' | '1C' | 'MANUAL';
   is_active: boolean;
@@ -758,6 +761,7 @@ export interface SalesOrder {
   customer_id: string;
   customer_name: string;
   agent_id?: string | null;
+  external_agent_code?: string | null; // original distributor agent id, retained so history can be remapped
   expeditor_name?: string | null; // who delivered it, as the distribution system names them (percent-of-deliveries pay)
   territory_id?: string | null;
   delivery_id?: string | null;
@@ -940,12 +944,16 @@ export interface AttendanceSettings {
   schedules: Record<string, WorkSchedule>; // per employee_id
   /** Admin-set start-time exception for a specific employee, applied over their group's schedule. */
   employee_start_times?: Record<string, string>;
+  /** Admin-set later/alternate start time for one employee on one exact calendar day. */
+  employee_day_start_times?: Record<string, Record<string, string>>;
   // RULES: percent of the month's earned salary by the discipline rules below (company rule book).
   penalty: { mode: 'NONE' | 'FIXED' | 'PER_MINUTE' | 'RULES'; amount: number; early_leave: boolean; monthly_cap: number };
   rules?: DisciplineRule[];
   groups?: WorkGroup[];
   /** Telegram group ID that records round-video attendance for each work group. */
   checkin_groups?: Record<string, string>;
+  /** Dedicated Telegram group ID for each employee/agent who posts a separate round video. */
+  checkin_employee_groups?: Record<string, string>;
   employee_groups?: Record<string, string>;   // employee_id -> group id
   agent_links?: Record<string, string>;       // employee_id -> agents.id (SalesDoc agent) for SALESDOC_VISIT groups
   employee_methods?: Record<string, StartSource>; // per employee: how they mark the start (overrides the group's way)

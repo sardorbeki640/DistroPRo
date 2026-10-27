@@ -5,8 +5,22 @@ import type {
   ExternalSyncPayment,
   ExternalSyncEmployee,
   ExternalLedgerEntry,
-  ExportDataPayload
+  ExportDataPayload,
+  ExternalPriceType
 } from '../interfaces.ts';
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 15000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err: any) {
+    if (controller.signal.aborted) throw new Error(`Linko serveridan ${timeoutMs / 1000} soniyada javob kelmadi. Server manzili yoki tarmoqni tekshirib, qayta urinib ko‘ring.`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * Linko.uz SFA adapter.
@@ -62,7 +76,7 @@ export class LinkoAdapter implements IntegrationAdapter {
     const cached = LinkoAdapter.sessionCache.get(key);
     if (cached) return cached;
     if (!config.username || !config.password) throw new Error('Linko login va paroli kiritilmagan.');
-    const res = await fetch(`${this.normalizeEndpoint(config.server_url)}/main/user/auth/`, {
+    const res = await fetchWithTimeout(`${this.normalizeEndpoint(config.server_url)}/main/user/auth/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ username: config.username, password: config.password, can_handle_2fa: true })
@@ -88,7 +102,7 @@ export class LinkoAdapter implements IntegrationAdapter {
     const base = this.normalizeEndpoint(config.server_url);
     const url = /^https?:\/\//.test(path) ? new URL(path) : new URL(base + path);
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
-    const res = await fetch(url, { headers: { Authorization: `Token ${token}`, Accept: 'application/json' } })
+    const res = await fetchWithTimeout(url.toString(), { headers: { Authorization: `Token ${token}`, Accept: 'application/json' } })
       .catch((e: any) => { throw new Error(`Linko serveriga ulanib bo'lmadi: ${e.message}`); });
     if (res.status === 401 && !retried && config.auth_type !== 'API_TOKEN') {
       LinkoAdapter.sessionCache.delete(this.cacheKey(config));
@@ -109,7 +123,7 @@ export class LinkoAdapter implements IntegrationAdapter {
    */
   public async describeWrite(config: Record<string, any>, path: string): Promise<{ allow: string; fields: string[] }> {
     const token = await this.login(config);
-    const res = await fetch(this.normalizeEndpoint(config.server_url) + path, { method: 'OPTIONS', headers: { Authorization: `Token ${token}`, Accept: 'application/json' } })
+    const res = await fetchWithTimeout(this.normalizeEndpoint(config.server_url) + path, { method: 'OPTIONS', headers: { Authorization: `Token ${token}`, Accept: 'application/json' } })
       .catch((e: any) => { throw new Error(`Linko serveriga ulanib bo'lmadi: ${e.message}`); });
     const data: any = await res.json().catch(() => null);
     if (!res.ok) throw new Error(`HTTP ${res.status} ${this.describeError(data)}`);
@@ -119,6 +133,34 @@ export class LinkoAdapter implements IntegrationAdapter {
       return `${name}:${f?.type || '?'}${f?.required ? '!' : ''}${f?.read_only ? '(ro)' : ''}${choices}`;
     });
     return { allow: res.headers.get('allow') || '?', fields };
+  }
+
+  /** Payment methods exposed by Linko's read-only Django REST form schema. */
+  public async listPaymentTypes(config: Record<string, any>) {
+    const paths = ['/sales/client_transaction/', '/sales/order_payment/'];
+    const fieldName = /payment[_-]?(type|method)|(type|method)[_-]?payment/i;
+    let lastError: unknown;
+    for (const path of paths) {
+      try {
+        const token = await this.login(config);
+        const res = await fetchWithTimeout(this.normalizeEndpoint(config.server_url) + path, {
+          method: 'OPTIONS',
+          headers: { Authorization: `Token ${token}`, Accept: 'application/json' }
+        });
+        const schema: any = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(`Linko ${path}: ${this.describeError(schema) || `HTTP ${res.status}`}`);
+        const post = schema?.actions?.POST || {};
+        const choices = Object.entries(post)
+          .filter(([name, field]: [string, any]) => fieldName.test(name) && !field?.read_only && Array.isArray(field?.choices))
+          .flatMap(([, field]: [string, any]) => field.choices)
+          .filter((choice: any) => choice && choice.value !== undefined && choice.value !== null && String(choice.value) !== '')
+          .map((choice: any) => ({ id: String(choice.value), name: String(choice.display_name ?? choice.label ?? choice.value), active: true }));
+        const unique = [...new Map(choices.map((x: any) => [x.id, x])).values()];
+        if (unique.length) return unique;
+      } catch (err) { lastError = err; }
+    }
+    if (lastError) throw lastError;
+    throw new Error('Linko kassasida to‘lov turi tanlovlari topilmadi. Linko serveri OPTIONS ro‘yxatini bermadi; IDni taxmin qilib saqlash xavfsiz emas.');
   }
 
   /** Every page of a paginated list, following `next`. */
@@ -282,14 +324,40 @@ export class LinkoAdapter implements IntegrationAdapter {
     });
   }
 
+  /** Price lists Linko exposes for orders. Each list's product values are returned by /main/product/prices/. */
+  public async listPriceTypes(config: Record<string, any>): Promise<ExternalPriceType[]> {
+    const lists = await this.readAll(config, '/sales/price_list/', { page_size: 1000 });
+    return lists.map((list: any) => ({
+      id: String(list.id),
+      name: String(list.name || `Narxlar ro‘yxati ${list.id}`),
+      // Linko does not label price lists as purchase/sale in this endpoint. Recognize explicit cost-list names;
+      // otherwise treat them as sale lists, since Linko's product price endpoint returns cash_price.
+      kind: /tannarx|закуп|себестоим|purchase|cost/i.test(String(list.name || '')) ? 'purchase' as const : 'sale' as const,
+      active: list.is_active !== false,
+      currency: typeof list.currency === 'string' ? list.currency : list.currency?.name || list.currency?.code || null
+    }));
+  }
+
   public async importPayments(config: Record<string, any>): Promise<ExternalSyncPayment[]> {
     const ledger = await this.importLedger(config);
     return ledger.filter(l => l.kind === 'PAYMENT').map(l => ({ externalPaymentId: l.externalId, customerCode: l.customerCode, amount: l.amount, paymentMethod: l.paymentMethod || 'cash', paymentDate: l.date }));
   }
 
-  /** Products with their Linko category (type) and brand. Linko lists no price here; prices come from order lines. */
+  /** Products with Linko category, brand and the selected Linko price-list values. */
   public async importProducts(config: Record<string, any>): Promise<any[]> {
     const products = await this.readAll(config, '/main/product/', { page_size: 1000 });
+    const types = await this.listPriceTypes(config);
+    const selectedSales = Array.isArray(config.sale_price_type_ids) ? config.sale_price_type_ids.map(String) : [];
+    const saleIds = selectedSales.length
+      ? selectedSales
+      : [String(config.sale_price_type_id || types.find(t => t.active && t.kind === 'sale')?.id || '')].filter(Boolean);
+    const purchaseId = String(config.purchase_price_type_id || '');
+    const selectedIds = [...new Set([...saleIds, ...(purchaseId ? [purchaseId] : [])])];
+    const pricesByList = new Map<string, Map<string, number>>();
+    for (const typeId of selectedIds) {
+      const rows = await this.readAll(config, '/main/product/prices/', { price_list: typeId, page_size: 1000 });
+      pricesByList.set(typeId, new Map(rows.map((row: any) => [String(row.id), Number(row.cash_price) || 0])));
+    }
     return products.filter((p: any) => !p.is_delete).map((p: any) => ({
       sku: `lk-${p.id}`,
       code: p.code || p.vendor_code || '',
@@ -297,8 +365,15 @@ export class LinkoAdapter implements IntegrationAdapter {
       category: p.type?.name || 'Boshqa',
       brand: p.brand?.name || undefined,
       unit: p.measurement?.name || 'dona',
-      purchase_cost: 0,
-      ...(Number(p.price) > 0 ? { selling_price: Number(p.price) } : {})
+      purchase_cost: purchaseId ? pricesByList.get(purchaseId)?.get(String(p.id)) || 0 : 0,
+      selling_price: saleIds.map(id => pricesByList.get(id)?.get(String(p.id)) || 0).find(price => price > 0) || Number(p.price) || 0,
+      prices: types.filter(t => selectedIds.includes(t.id) && pricesByList.get(t.id)?.has(String(p.id))).map(t => ({
+        type_id: t.id,
+        name: t.name,
+        kind: t.kind,
+        currency: t.currency || null,
+        price: pricesByList.get(t.id)!.get(String(p.id)) || 0
+      }))
     }));
   }
 

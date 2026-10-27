@@ -131,6 +131,7 @@ export default function App() {
             stats={stats} 
             onNavigate={setCurrentView} 
             onOpenAIAgent={() => setIsAIAgentOpen(true)} 
+            onRefresh={loadData}
           />
         );
       case 'forecast':
@@ -206,7 +207,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Header
           user={user}
           activeCashDay={cashDay}
@@ -219,8 +220,8 @@ export default function App() {
           onProfileChanged={async () => { const r = await api.getMe(); setUser(r.user); }}
         />
 
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-          <div className="mx-auto max-w-7xl">
+        <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8">
+          <div className="mx-auto w-full min-w-0 max-w-7xl">
             <ErrorBoundary resetKey={currentView}>{renderCurrentView()}</ErrorBoundary>
           </div>
         </main>

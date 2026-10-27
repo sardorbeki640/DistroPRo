@@ -12,6 +12,40 @@ import { tagIntegrationRows } from '../services/source-tagging.service.ts';
 
 const router = Router();
 
+/** Permanently remove a connection and its credentials while preserving, but hiding, its imported history. */
+router.delete('/connection/:id', requireAuth, requirePermission('integration', 'create'), (req: Request, res: Response, next) => {
+  try {
+    const companyId = req.user!.companyId;
+    const target = db.findOne('integrations', i => i.id === req.params.id && i.company_id === companyId);
+    if (!target) { res.status(404).json({ success: false, error: 'Server ulanishi topilmadi.' }); return; }
+
+    // Tag legacy imported records before the connection id is removed so they remain hidden.
+    tagIntegrationRows(target.id);
+    SalesDocHistoryService.stop(target.id);
+    const shouldChooseNext = target.config?.primary === true;
+    const next = shouldChooseNext
+      ? distributionIntegrations(companyId)
+          .filter(d => d.integration.id !== target.id && d.integration.status === 'CONNECTED' && !d.integration.disabled)
+          .sort((a, b) => String(b.integration.last_sync_at || '').localeCompare(String(a.integration.last_sync_at || '')))[0]?.integration
+      : undefined;
+    db.transaction(() => {
+      if (next) {
+        for (const d of distributionIntegrations(companyId)) {
+          const isNext = d.integration.id === next.id;
+          if (!!d.integration.config?.primary !== isNext) db.update('integrations', d.integration.id, { config: { ...d.integration.config, primary: isNext } });
+        }
+      }
+      db.delete('integrations', target.id);
+    });
+    AuditService.log({
+      company_id: companyId, user_id: req.user!.userId, user_email: req.user!.email, action: 'DELETE', entity: 'Integration',
+      entity_id: target.id, old_value: { provider_name: target.provider_name, connection_name: target.config?.connection_name || '', server_url: target.config?.server_url || '' },
+      new_value: null, reason: 'Server ulanishi va saqlangan kirish ma’lumotlari o‘chirildi; import tarixi yashirildi'
+    });
+    res.json({ success: true, message: 'Server ulanishi o‘chirildi. Avvalgi import tarixi o‘chmadi va ko‘rinmaydi.' });
+  } catch (err) { next(err); }
+});
+
 /** A changed endpoint/account is a new data source; keep the old rows attached to the old connection id. */
 function sameConnectionSource(a: Record<string, any>, b: Record<string, any>) {
   const identity = (c: Record<string, any>) => JSON.stringify([
@@ -42,8 +76,8 @@ router.get('/list', requireAuth, requirePermission('integration', 'view'), (req:
           connection_name: cfg.connection_name || '',
           forecast_days:cfg.forecast_days||100,
         order_date_field:cfg.order_date_field||'date',
-        payment_cash_id:cfg.payment_types?.CASH?.SD_id||'',
-        payment_terminal_id:cfg.payment_types?.TERMINAL?.SD_id||'',
+        payment_cash_id:configuredPaymentId(cfg.payment_types?.CASH),
+        payment_terminal_id:configuredPaymentId(cfg.payment_types?.TERMINAL),
         auth_type: cfg.auth_type || 'API_TOKEN',
           server_url: cfg.server_url || '',
           company_account_id: cfg.company_account_id || '',
@@ -51,6 +85,7 @@ router.get('/list', requireAuth, requirePermission('integration', 'view'), (req:
           database_name: cfg.database_name || '',
           sync_interval: cfg.sync_interval || '1h',
           auto_sync: cfg.auto_sync !== false,
+          primary: cfg.primary === true,
           has_token: Boolean(cfg.api_token),
           api_token_masked: cfg.api_token ? `${cfg.api_token.slice(0, 4)}••••${cfg.api_token.slice(-4)}` : null,
           has_password: Boolean(cfg.password),
@@ -102,6 +137,39 @@ router.post('/:provider/enabled', requireAuth, requirePermission('integration', 
       entity_id: upperProvider, old_value: { disabled: !!record.disabled }, new_value: { disabled: !enabled }, reason: message
     });
     res.json({ success: true, message });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Choose which connected distribution connection drives default reports and integration-backed screens. */
+router.post('/:provider/primary', requireAuth, requirePermission('integration', 'create'), (req: Request, res: Response, next) => {
+  try {
+    const companyId = req.user!.companyId;
+    const provider = String(req.params.provider || '').toUpperCase();
+    const integrationId = String(req.body?.integration_id || '');
+    const target = db.findOne('integrations', i => i.id === integrationId && i.company_id === companyId && i.provider_name.toUpperCase() === provider);
+    if (!target || !distributionIntegrations(companyId).some(d => d.integration.id === target.id)) {
+      res.status(404).json({ success: false, error: 'Tanlangan server ulanishi topilmadi.' });
+      return;
+    }
+    if (target.disabled || target.status !== 'CONNECTED') {
+      res.status(400).json({ success: false, error: 'Asosiy qilishdan oldin serverni yoqing va ulanishni tekshiring.' });
+      return;
+    }
+    const rows = distributionIntegrations(companyId).map(d => d.integration);
+    db.transaction(() => {
+      for (const row of rows) {
+        const isTarget = row.id === target.id;
+        if (!!row.config?.primary !== isTarget) db.update('integrations', row.id, { config: { ...row.config, primary: isTarget } });
+      }
+    });
+    AuditService.log({
+      company_id: companyId, user_id: req.user!.userId, user_email: req.user!.email, action: 'UPDATE', entity: 'Integration',
+      entity_id: target.id, old_value: null, new_value: { provider_name: provider, integration_id: target.id, connection_name: target.config?.connection_name || '' },
+      reason: `${target.config?.connection_name || provider} asosiy server sifatida tanlandi`
+    });
+    res.json({ success: true, message: `${target.config?.connection_name || provider} asosiy server qilindi.` });
   } catch (err) {
     next(err);
   }
@@ -208,7 +276,7 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
       forecast_days:forecastDays,
       order_date_field:req.body.order_date_field==='dateLoad'?'dateLoad':'date',
       // Cash and old-debt payments go to the cash type; terminal and Click to the card type.
-      payment_types:{...existing?.config.payment_types,...(req.body.payment_cash_id?{CASH:{SD_id:req.body.payment_cash_id},OLD_DEBT:{SD_id:req.body.payment_cash_id}}:{}),...(req.body.payment_terminal_id?{TERMINAL:{SD_id:req.body.payment_terminal_id},CLICK:{SD_id:req.body.payment_terminal_id}}:{})},
+      payment_types:{...existing?.config.payment_types,...(req.body.payment_cash_id?{CASH:configuredPaymentRef(upperProvider, String(req.body.payment_cash_id)),OLD_DEBT:configuredPaymentRef(upperProvider, String(req.body.payment_cash_id))}:{}),...(req.body.payment_terminal_id?{TERMINAL:configuredPaymentRef(upperProvider, String(req.body.payment_terminal_id)),CLICK:configuredPaymentRef(upperProvider, String(req.body.payment_terminal_id))}:{})},
       // Which SalesDoc price type is the selling price and which the purchase cost ('' = detected automatically).
       ...(req.body.sale_price_type_id !== undefined ? { sale_price_type_id: String(req.body.sale_price_type_id || '') } : {}),
       ...(req.body.sale_price_type_ids !== undefined ? { sale_price_type_ids: Array.isArray(req.body.sale_price_type_ids) ? req.body.sale_price_type_ids.map(String).filter(Boolean) : [] } : {}),
@@ -251,7 +319,7 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
       // Preserve the previous source id so reports for the new endpoint cannot mix its imported history.
       tagIntegrationRows(existing.id);
       SalesDocHistoryService.stop(existing.id);
-      db.update('integrations', existing.id, { disabled: true, status: 'DISCONNECTED' });
+      db.update('integrations', existing.id, { disabled: true, status: 'DISCONNECTED', config: { ...existing.config, primary: false } });
       for (const other of db.find('integrations', i => i.company_id === companyId && i.id !== existing.id && i.config?.primary === true)) {
         db.update('integrations', other.id, { config: { ...other.config, primary: false } });
       }
@@ -352,11 +420,20 @@ function distributionFor(companyId: string, provider: string, integrationId?: st
   if (!p || p === 'ACTIVE') return activeDistribution(companyId);
   const all = distributionIntegrations(companyId);
   const sameName = (name: string) => name.toUpperCase() === p || (/^SALES_?DOC/.test(p) && /^SALES_?DOC/.test(name.toUpperCase()));
-  return all.find(d => sameName(d.integration.provider_name)) || null;
+  const matches = all.filter(d => sameName(d.integration.provider_name));
+  const active = activeDistribution(companyId);
+  if (active && matches.some(d => d.integration.id === active.integration.id)) return active;
+  const usable = matches.filter(d => d.integration.status === 'CONNECTED' && !d.integration.disabled);
+  return usable.find(d => d.integration.config?.primary === true)
+    || usable.slice().sort((a, b) => String(b.integration.last_sync_at || '').localeCompare(String(a.integration.last_sync_at || '')))[0]
+    || matches[0]
+    || null;
 }
 
 const notConnected = (res: Response, provider: string) =>
   res.status(404).json({ success: false, error: `${String(provider).toUpperCase() === 'ACTIVE' ? 'Distribyutor tizimi' : provider} ulanmagan` });
+const configuredPaymentId = (value: any) => String(value?.SD_id ?? value?.id ?? value?.code_1C ?? '');
+const configuredPaymentRef = (provider: string, value: string) => provider === 'LINKO' ? { id: value } : { SD_id: value };
 
 /** The connected distribution system: its name and what it can do, so the screens adapt to it instead of a fixed system. */
 // Any signed-in user: cashiers and managers see the system's name on their screens (no settings are returned).
@@ -384,7 +461,7 @@ router.get('/:provider/payment-types', requireAuth, requirePermission('integrati
       success: true,
       system: d.name,
       paymentTypes: list.map(t => ({ SD_id: t.id, id: t.id, name: t.name, active: t.active })),
-      selected: { cash: d.integration.config?.payment_types?.CASH?.SD_id || '', terminal: d.integration.config?.payment_types?.TERMINAL?.SD_id || '' }
+      selected: { cash: configuredPaymentId(d.integration.config?.payment_types?.CASH), terminal: configuredPaymentId(d.integration.config?.payment_types?.TERMINAL) }
     });
   } catch (err) {
     next(err);
@@ -421,7 +498,8 @@ router.get('/:provider/history-status', requireAuth, requirePermission('integrat
     const companyId = req.user!.companyId;
     const asked = String(req.query.provider || '');
     // Old path "/salesdoc/history-status" without ?provider still means SalesDoc.
-    const d = distributionFor(companyId, asked || req.params.provider);
+    const integrationId = String(req.query.integration_id || '');
+    const d = distributionFor(companyId, asked || req.params.provider, integrationId || undefined);
     const integration = d?.integration;
     if (!integration) { res.json({ success: true, configured: false, history: null }); return; }
     const history = SalesDocHistoryService.getState(integration.id);

@@ -132,8 +132,8 @@ test('non-SalesDoc sync: repeated payments are booked once, unknown customers ar
 
 test('forecast divides by days of loaded history, not by days with no data', () => {
   db.insert('integrations', { id: 'sd', company_id: 'c', provider_name: 'SALESDOC', status: 'CONNECTED', config: { forecast_days: 100, history: { from: addDays(today, -19), status: 'COMPLETE' } }, created_at: today } as any);
-  db.insert('products', { id: 'p', sku: 'p1', company_id: 'c', is_active: true, stock_quantity: 40, purchase_cost: 1, selling_price: 2 } as any);
-  db.insert('sales_orders', { id: 'o', company_id: 'c', status: 'DELIVERED', order_date: today } as any);
+  db.insert('products', { id: 'p', sku: 'p1', company_id: 'c', source_integration_id: 'sd', is_active: true, stock_quantity: 40, purchase_cost: 1, selling_price: 2 } as any);
+  db.insert('sales_orders', { id: 'o', company_id: 'c', source_integration_id: 'sd', status: 'DELIVERED', order_date: today } as any);
   db.insert('sales_order_items', { id: 'i', sales_order_id: 'o', product_id: 'p1', sku: 'p1', quantity: 20 } as any);
   ForecastService.calculateHistoricalSalesVelocity('c');
   const result = ForecastService.getStockRunRate('c');

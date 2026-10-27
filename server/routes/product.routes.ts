@@ -7,6 +7,7 @@ import type { Product } from '../db/schema.ts';
 import { AuditService } from '../services/audit.service.ts';
 import { integrationProvider } from '../integrations/provider.ts';
 import { SalesDocHistoryService } from '../services/salesdoc-history.service.ts';
+import { inventoryObservation } from '../services/inventory-observation.ts';
 
 const router = Router();
 router.use((req, res, next) => {
@@ -82,6 +83,8 @@ router.post('/', requireAuth, requirePermission('settings', 'update'), (req: Req
       current_cost: Number(purchase_cost) || 0,
       selling_price: Number(selling_price) || 0,
       stock_quantity: Number(stock_quantity) || 0,
+      ...(Number(stock_quantity) > 0 ? { last_in_stock_at: businessToday() } : {}),
+      stock_observed_at: businessToday(),
       source: source || 'MANUAL',
       is_active: true,
       created_at: new Date().toISOString()
@@ -135,6 +138,7 @@ router.put('/:id', requireAuth, requirePermission('settings', 'update'), (req: R
       ...(purchase_cost !== undefined ? { purchase_cost: Number(purchase_cost), current_cost: Number(purchase_cost) } : {}),
       ...(selling_price !== undefined ? { selling_price: Number(selling_price) } : {}),
       ...(stock_quantity !== undefined ? { stock_quantity: Number(stock_quantity) } : {}),
+      ...(stock_quantity !== undefined ? inventoryObservation(existing, Number(stock_quantity), businessToday()) : {}),
       ...(is_active !== undefined ? { is_active } : {}),
       updated_at: new Date().toISOString()
     });

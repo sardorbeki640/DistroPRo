@@ -247,7 +247,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ user, onNavigateToPr
         <div className="rounded-2xl border-2 border-amber-300 bg-gradient-to-br from-amber-50 via-white to-amber-50/30 p-4 shadow-2xs">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-black uppercase tracking-wider text-amber-900">
-              Boy Berilgan Savdo
+              Taxminiy Boy Berilgan Savdo
             </span>
             <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-100 text-amber-800">
               <DollarSign className="h-4 w-4" />
@@ -256,7 +256,8 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ user, onNavigateToPr
           <p className="mt-2 text-2xl font-black text-amber-950">
             {formatUZS(Math.round(outOfStockData?.summary?.total_lost_sales_uzs ?? 0))}
           </p>
-          <p className="text-[11px] text-amber-800">Tovar bo‘lganda sotilishi mumkin edi (so‘nggi {outOfStockData?.summary?.window_days ?? 100} kun ichida)</p>
+          <p className="text-[11px] text-amber-800">Tasdiqlangan 0 qoldiq davri va undan oldingi sotuv tezligi asosida (so‘nggi {outOfStockData?.summary?.window_days ?? 100} kun)</p>
+          {!!outOfStockData?.summary?.estimate_unknown_count && <p className="mt-1 text-[11px] font-semibold text-amber-900">{outOfStockData.summary.estimate_unknown_count} ta mahsulotda sana yoki talab tarixi yetarli emas; ular summaga qo‘shilmadi.</p>}
           <p className="mt-1 text-[11px] font-semibold text-amber-900">
             Sof foyda: {outOfStockData?.summary?.profit_unknown_count
               ? <>hisoblanmadi — {outOfStockData.summary.profit_unknown_count} ta tovarning kirim narxi yo‘q ({systemName}da kirim narxi kiritilmagan yoki 1 so‘m){outOfStockData.summary.total_lost_profit_uzs ? `; ma’lumi: ${formatUZS(Math.round(outOfStockData.summary.total_lost_profit_uzs))}` : ''}</>
@@ -321,7 +322,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ user, onNavigateToPr
                 </span>
               </div>
               <p className="text-xs text-neutral-500">
-                Necha kundan beri tugaganligi, shu kunlar ichida qancha sotilishi mumkin bo'lgani va yo'qotilgan sof foyda
+                Birinchi tasdiqlangan 0 qoldiq kuni, oxirgi ombor tekshiruvi va avvalgi sotuv tezligidan hisoblangan taxminiy savdo yo‘qotishi
               </p>
             </div>
           </div>
@@ -693,7 +694,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ user, onNavigateToPr
                     <p>Omborda {outOfStockData?.summary?.out_of_stock_count ?? 0} ta tovar tugagan.</p>
                     {[...(outOfStockData?.items || [])].sort((a, b) => b.lost_sales_uzs - a.lost_sales_uzs).slice(0, 5).map((it, idx) => (
                       <p key={idx} className="text-rose-300">
-                        • {it.name}: {stockOutLabel(it)} yo'q, boy berilgan savdo {formatUZS(it.lost_sales_uzs)}
+                        • {it.name}: {stockOutLabel(it)}, taxminiy boy berilgan savdo {formatUZS(it.lost_sales_uzs)}
                       </p>
                     ))}
                     <p className="text-white font-bold pt-1">
