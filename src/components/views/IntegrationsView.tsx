@@ -252,7 +252,11 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
     const requestId = ++providerListsRequest.current;
     if (!integrationId) return;
     const record = integrations.find(i => i.id === integrationId && i.provider_name.toUpperCase() === providerName.toUpperCase());
-    const caps = record?.capabilities;
+    // Capabilities do not depend on connection status. Request lists even when the
+    // saved config is currently ERROR so the exact provider response is visible.
+    const caps = record?.capabilities || (providerName.toUpperCase().includes('SALESDOC')
+      ? { paymentTypes: true, priceTypes: true }
+      : adapters.find(a => String(a.provider_name || a.name || '').toUpperCase() === providerName.toUpperCase())?.capabilities);
     setPaymentTypes([]); setPriceTypes([]); setPriceTypesUsed({});
     setPaymentTypesError(null); setPriceTypesError(null);
     setPaymentTypesLoading(!!caps?.paymentTypes);
@@ -368,14 +372,18 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
     setStatusMessage(null);
     try {
       const res = await api.saveIntegrationConfig(configForm);
+      setConfigForm(current => ({ ...current, integration_id: res.integration_id }));
+      setModalTestResult(res.connected === false ? { ok: false, message: res.message } : { ok: true, message: res.message });
       setStatusMessage({
-        type: 'success',
-        text: `${configForm.provider_name === 'SALESDOC' ? 'SalesDoctor' : configForm.provider_name}: ${res.message || "Shaxsiy server kabineti ulanish parametrlari muvaffaqiyatli saqlandi!"}`,
-        showReportsLink: true
+        type: res.connected === false ? 'error' : 'success',
+        text: `${configForm.provider_name === 'SALESDOC' ? 'SalesDoctor' : configForm.provider_name}: ${res.message || "Sozlamalar saqlandi."}`,
+        showReportsLink: res.connected !== false
       });
-      setShowConfigModal(false);
       refreshDistribution();
       await fetchIntegrations();
+      // Load references for this exact connection immediately; keep the dialog open
+      // so payment and price types can be selected without reopening the settings.
+      await loadProviderLists(configForm.provider_name, res.integration_id);
       if (onRefresh) onRefresh();
     } catch (err: any) {
       setStatusMessage({

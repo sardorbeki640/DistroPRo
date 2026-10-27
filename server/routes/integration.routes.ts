@@ -370,7 +370,9 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
     });
 
     if (!check.ok) {
-      res.status(400).json({ success: false, error: `Sozlama saqlandi, lekin ulanish tasdiqlanmadi: ${check.message}`, integration_id: recordId, connected: false });
+      // Keep the saved record addressable by the UI so it can show the exact connection
+      // failure and let the owner retry without losing the values they just entered.
+      res.json({ success: true, connected: false, message: `Sozlamalar saqlandi, ammo ulanish tasdiqlanmadi: ${check.message}`, integration_id: recordId });
       return;
     }
 
@@ -401,6 +403,7 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
 
     res.json({
       success: true,
+      connected: true,
       message: `${upperProvider} ulandi va sozlamalar saqlandi${syncMsg}`,
       integration_id: recordId,
       sync: syncDetails
