@@ -105,6 +105,9 @@ class DatabaseManager {
   private nextSeq = 1;
   private turso: Client | null = null;
   private tursoDrain: Promise<void> | null = null;
+  private tursoRetryTimer: NodeJS.Timeout | null = null;
+  private tursoRetryDelayMs = 5_000;
+  private tursoLastErrorLogAt = 0;
 
   constructor() {
     this.data = JSON.parse(JSON.stringify(INITIAL_EMPTY_SCHEMA));
@@ -233,8 +236,7 @@ class DatabaseManager {
 
     this.turso = client;
     await this.flushTurso();
-    const timer = setInterval(() => { void this.flushTurso().catch(error => console.error('[Turso] Sinxronlash xatosi:', error.message)); }, 5000);
-    timer.unref?.();
+    this.scheduleTursoFlush();
     console.log('[Turso] Ulanish tayyor; ma’lumotlar masofaviy bazaga sinxronlanadi.');
   }
 
@@ -282,9 +284,30 @@ class DatabaseManager {
     }
     const work = this.drainTursoOutbox();
     this.tursoDrain = work;
-    try { await work; }
-    finally { if (this.tursoDrain === work) this.tursoDrain = null; }
+    try {
+      await work;
+      this.tursoRetryDelayMs = 5_000;
+    } catch (error) {
+      const now = Date.now();
+      if (now - this.tursoLastErrorLogAt >= 60_000) {
+        console.error('[Turso] Sinxronlash xatosi; navbat saqlanib, keyin qayta uriniladi:', (error as Error).message);
+        this.tursoLastErrorLogAt = now;
+      }
+      this.tursoRetryDelayMs = Math.min(this.tursoRetryDelayMs * 2, 5 * 60_000);
+      this.scheduleTursoFlush(this.tursoRetryDelayMs);
+      throw error;
+    } finally { if (this.tursoDrain === work) this.tursoDrain = null; }
     if (Number(this.sql.prepare('SELECT COUNT(*) AS n FROM turso_outbox').get().n) > 0) return this.flushTurso();
+  }
+
+  /** Coalesce background writes and back off on network failures instead of flooding Turso and Render logs. */
+  private scheduleTursoFlush(delayMs = this.tursoRetryDelayMs): void {
+    if (!this.turso || !this.sql || this.tursoRetryTimer) return;
+    this.tursoRetryTimer = setTimeout(() => {
+      this.tursoRetryTimer = null;
+      void this.flushTurso().catch(() => { /* flushTurso logs once and schedules a backed-off retry */ });
+    }, delayMs);
+    this.tursoRetryTimer.unref?.();
   }
 
   private async drainTursoOutbox(): Promise<void> {
@@ -434,7 +457,7 @@ class DatabaseManager {
     }
     this.dirty.clear();
     this.fullDirty.clear();
-    if (this.turso) void this.flushTurso().catch(error => console.error('[Turso] Sinxronlash navbatda qoldi:', error.message));
+    if (this.turso) this.scheduleTursoFlush();
   }
 
   /** Kept for callers of the old API: writes whatever is pending. */
