@@ -168,7 +168,9 @@ class DatabaseManager {
       this.meta.set(row, { key: r.k, seq: Number(r.seq) });
       this.indexOf(r.tbl).set(r.k, row);
       if (Number(r.seq) > maxSeq) maxSeq = Number(r.seq);
-      if (++processed % 250 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      // Keep Render's 5-second health check responsive even while restoring a
+      // large Turso snapshot on a single-core free instance.
+      if (++processed % 25 === 0) await new Promise<void>(resolve => setImmediate(resolve));
     }
     this.nextSeq = maxSeq + 1;
   }
@@ -212,7 +214,7 @@ class DatabaseManager {
             put.run(String(row.tbl), String(row.k), Number(row.seq), String(row.data));
             lastTable = String(row.tbl);
             lastSeq = Number(row.seq);
-            if (++restoredRows % 250 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+            if (++restoredRows % 25 === 0) await new Promise<void>(resolve => setImmediate(resolve));
           }
           if (page.rows.length < pageSize) break;
           page = await client.execute({
@@ -245,7 +247,7 @@ class DatabaseManager {
       if (op.op === 'clear') clear.run(op.tbl);
       else if (op.op === 'delete' && op.k !== null) remove.run(op.tbl, op.k);
       else if (op.op === 'upsert' && op.k !== null && op.seq !== null && op.data !== null) put.run(op.tbl, op.k, op.seq, op.data);
-      if (++processed % 250 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      if (++processed % 25 === 0) await new Promise<void>(resolve => setImmediate(resolve));
     }
   }
 
