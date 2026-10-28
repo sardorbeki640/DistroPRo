@@ -303,10 +303,13 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
       configPayload.history_start_date = req.body.history_start_date || undefined;
     }
 
-    // "Connected" only after the provider actually answered.
-    const adapter = integrationProvider.getAdapter(upperProvider);
-    const check = await adapter.testConnection(configPayload).catch((e: any) => ({ ok: false, message: e.message }));
     const sourceChanged = !!existing && !sameConnectionSource(existing.config || {}, configPayload);
+    const requiresConnectionCheck = !existing || sourceChanged;
+    // Saving options such as dates and price types must not wait on a remote login
+    // or trigger a full data sync. Verify only a new or changed data source.
+    const check = requiresConnectionCheck
+      ? await integrationProvider.getAdapter(upperProvider).testConnection(configPayload).catch((e: any) => ({ ok: false, message: e.message }))
+      : { ok: existing!.status === 'CONNECTED', message: 'Ulanish sozlamalari o‘zgarmadi; faqat parametrlar saqlandi.' };
     if (sourceChanged && !check.ok) {
       res.status(400).json({ success: false, error: `Yangi server ulanishi tasdiqlanmadi; amaldagi ulanish va uning ma’lumotlari saqlab qolindi: ${check.message}`, integration_id: existing!.id, connected: false });
       return;
@@ -383,7 +386,7 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
 
     let syncDetails: any = null;
     try {
-      if (configPayload.auto_sync) {
+      if (configPayload.auto_sync && requiresConnectionCheck) {
         syncDetails = await integrationProvider.syncProvider(
           companyId,
           upperProvider,
