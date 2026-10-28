@@ -78,6 +78,25 @@ async function startServer() {
   // Large enough for a screen table sent to /api/exports/xlsx (tens of thousands of rows).
   app.use(express.json({ limit: '25mb' }));
 
+  // Render must be able to reach a lightweight health endpoint while the remote
+  // Turso snapshot is restored. That restore can take longer than Render's
+  // health-check timeout; starting the listener first prevents restart loops.
+  let databaseReady = false;
+  app.get('/api/health', (_req, res) => {
+    res.json({ status: databaseReady ? 'ok' : 'starting', version: '1.0.0-phase1-foundation', system: 'Distribution Finance System', time: new Date().toISOString() });
+  });
+  app.use('/api', (req, res, next) => {
+    if (!databaseReady) {
+      res.status(503).json({ success: false, error: 'Tizim bazadagi ma’lumotlarni yuklamoqda. Birozdan keyin qayta urinib ko‘ring.' });
+      return;
+    }
+    next();
+  });
+  if (process.env.NODE_ENV === 'production') app.use(express.static(path.join(process.cwd(), 'dist')));
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`Distribution Finance Server running on http://${HOST}:${PORT}`);
+  });
+
   // Bootstrap Database & execute migrations
   try {
     migrator.register(initialSchemaMigration);
@@ -109,17 +128,10 @@ async function startServer() {
     try { SetupService.createOwner(process.env.OWNER_EMAIL.trim(), process.env.OWNER_PASSWORD); console.log('[Setup] Egasi hisobi sozlamalardan yaratildi'); }
     catch (err: any) { console.warn('[Setup] Egasi hisobi yaratilmadi:', err.message); }
   }
+  databaseReady = true;
+  console.log('[DB Boot] Ma’lumotlar bazasi tayyor.');
 
   // API Routes
-  app.get('/api/health', (req, res) => {
-    res.json({
-      status: 'ok',
-      version: '1.0.0-phase1-foundation',
-      system: 'Distribution Finance System',
-      time: new Date().toISOString()
-    });
-  });
-
   // A successful write response is sent only after Turso confirms the transaction.
   app.use('/api', (req, res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || !db.isTursoEnabled()) return next();
@@ -175,15 +187,10 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
-
-  const server = app.listen(PORT, HOST, () => {
-    console.log(`Distribution Finance Server running on http://${HOST}:${PORT}`);
-  });
   // DISABLE_SCHEDULER=1 for a copy of the database that must not talk to SalesDoc on its own.
   if (process.env.NODE_ENV !== 'test' && process.env.DISABLE_SCHEDULER !== '1') startIntegrationScheduler();
   if (process.env.NODE_ENV !== 'test' && process.env.DISABLE_BACKUPS !== '1') startBackupScheduler();
