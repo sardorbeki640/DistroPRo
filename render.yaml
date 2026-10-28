@@ -6,7 +6,8 @@ services:
     repo: https://github.com/sardorbeki640/DistroPRo.git
     branch: main
     buildCommand: corepack enable && corepack prepare pnpm@11.25.0 --activate && pnpm install --frozen-lockfile && pnpm run build
-    startCommand: pnpm start
+    # Dependencies are installed during build; start Node directly to avoid a Corepack download on every restart.
+    startCommand: node --env-file-if-exists=.env.local dist/server.cjs
     healthCheckPath: /api/health
     autoDeployTrigger: commit
     envVars:

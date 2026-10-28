@@ -154,6 +154,25 @@ class DatabaseManager {
     this.nextSeq = maxSeq + 1;
   }
 
+  /** Hydrate in small turns so the HTTP health endpoint stays responsive on small hosts. */
+  private async reloadFromSqliteYielding(): Promise<void> {
+    this.data = JSON.parse(JSON.stringify(INITIAL_EMPTY_SCHEMA));
+    this.index.clear();
+    this.meta = new WeakMap<object, RowMeta>();
+    let maxSeq = 0;
+    let processed = 0;
+    for (const r of this.sql.prepare('SELECT tbl, k, seq, data FROM rows ORDER BY tbl, seq').iterate()) {
+      const row = this.deserialize(r.tbl, JSON.parse(r.data));
+      const table = ((this.data as any)[r.tbl] ||= []) as any[];
+      table.push(row);
+      this.meta.set(row, { key: r.k, seq: Number(r.seq) });
+      this.indexOf(r.tbl).set(r.k, row);
+      if (Number(r.seq) > maxSeq) maxSeq = Number(r.seq);
+      if (++processed % 250 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    this.nextSeq = maxSeq + 1;
+  }
+
   /** Connect the local SQLite cache to a Turso database and restore the cloud copy before migrations run. */
   public async connectTurso(): Promise<void> {
     if (this.turso) return;
@@ -176,7 +195,7 @@ class DatabaseManager {
     if (firstPage.rows.length === 0) {
       // First connection: preserve any existing SQLite data by seeding the empty Turso table.
       if (localCount > 0) await this.writeTursoRows(client, this.sql.prepare('SELECT tbl, k, seq, data FROM rows ORDER BY tbl, seq').iterate());
-      this.reloadFromSqlite();
+      await this.reloadFromSqliteYielding();
     } else {
       // Cloud is authoritative after the first sync. Replay the durable local outbox over the snapshot.
       const pending = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id').all() as TursoOutboxOp[];
@@ -187,11 +206,13 @@ class DatabaseManager {
         let page = firstPage;
         let lastTable = '';
         let lastSeq = 0;
+        let restoredRows = 0;
         while (page.rows.length) {
           for (const row of page.rows as any[]) {
             put.run(String(row.tbl), String(row.k), Number(row.seq), String(row.data));
             lastTable = String(row.tbl);
             lastSeq = Number(row.seq);
+            if (++restoredRows % 250 === 0) await new Promise<void>(resolve => setImmediate(resolve));
           }
           if (page.rows.length < pageSize) break;
           page = await client.execute({
@@ -199,13 +220,13 @@ class DatabaseManager {
             args: [lastTable, lastTable, lastSeq, pageSize]
           });
         }
-        this.applyOutboxToLocal(pending);
+        await this.applyOutboxToLocal(pending);
         this.sql.exec('COMMIT');
       } catch (error) {
         try { this.sql.exec('ROLLBACK'); } catch { /* not started */ }
         throw error;
       }
-      this.reloadFromSqlite();
+      await this.reloadFromSqliteYielding();
     }
 
     this.turso = client;
@@ -215,14 +236,16 @@ class DatabaseManager {
     console.log('[Turso] Ulanish tayyor; ma’lumotlar masofaviy bazaga sinxronlanadi.');
   }
 
-  private applyOutboxToLocal(ops: TursoOutboxOp[]): void {
+  private async applyOutboxToLocal(ops: TursoOutboxOp[]): Promise<void> {
     const remove = this.sql.prepare('DELETE FROM rows WHERE tbl = ? AND k = ?');
     const clear = this.sql.prepare('DELETE FROM rows WHERE tbl = ?');
     const put = this.sql.prepare('INSERT OR REPLACE INTO rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)');
+    let processed = 0;
     for (const op of ops) {
       if (op.op === 'clear') clear.run(op.tbl);
       else if (op.op === 'delete' && op.k !== null) remove.run(op.tbl, op.k);
       else if (op.op === 'upsert' && op.k !== null && op.seq !== null && op.data !== null) put.run(op.tbl, op.k, op.seq, op.data);
+      if (++processed % 250 === 0) await new Promise<void>(resolve => setImmediate(resolve));
     }
   }
 
