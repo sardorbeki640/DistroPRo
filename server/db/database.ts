@@ -166,11 +166,14 @@ class DatabaseManager {
 
     const client = createClient({ url, ...(authToken ? { authToken } : {}) });
     await client.execute('CREATE TABLE IF NOT EXISTS distropro_rows (tbl TEXT NOT NULL, k TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tbl, k))');
-    const remoteCountResult = await client.execute('SELECT COUNT(*) AS n FROM distropro_rows');
-    const remoteCount = Number(remoteCountResult.rows[0]?.n || 0);
+    const pageSize = 2000;
+    const firstPage = await client.execute({
+      sql: 'SELECT tbl, k, seq, data FROM distropro_rows ORDER BY tbl, seq LIMIT ?',
+      args: [pageSize]
+    });
     const localCount = Number(this.sql.prepare('SELECT COUNT(*) AS n FROM rows').get().n);
 
-    if (remoteCount === 0) {
+    if (firstPage.rows.length === 0) {
       // First connection: preserve any existing SQLite data by seeding the empty Turso table.
       if (localCount > 0) await this.writeTursoRows(client, this.sql.prepare('SELECT tbl, k, seq, data FROM rows ORDER BY tbl, seq').iterate());
       this.reloadFromSqlite();
@@ -181,14 +184,20 @@ class DatabaseManager {
       try {
         this.sql.exec('DELETE FROM rows');
         const put = this.sql.prepare('INSERT OR REPLACE INTO rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)');
-        const pageSize = 250;
-        for (let offset = 0; offset < remoteCount; offset += pageSize) {
-          const page = await client.execute({
-            sql: 'SELECT tbl, k, seq, data FROM distropro_rows ORDER BY tbl, seq LIMIT ? OFFSET ?',
-            args: [pageSize, offset]
+        let page = firstPage;
+        let lastTable = '';
+        let lastSeq = 0;
+        while (page.rows.length) {
+          for (const row of page.rows as any[]) {
+            put.run(String(row.tbl), String(row.k), Number(row.seq), String(row.data));
+            lastTable = String(row.tbl);
+            lastSeq = Number(row.seq);
+          }
+          if (page.rows.length < pageSize) break;
+          page = await client.execute({
+            sql: 'SELECT tbl, k, seq, data FROM distropro_rows WHERE tbl > ? OR (tbl = ? AND seq > ?) ORDER BY tbl, seq LIMIT ?',
+            args: [lastTable, lastTable, lastSeq, pageSize]
           });
-          for (const row of page.rows as any[]) put.run(String(row.tbl), String(row.k), Number(row.seq), String(row.data));
-          if (page.rows.length === 0) break;
         }
         this.applyOutboxToLocal(pending);
         this.sql.exec('COMMIT');
