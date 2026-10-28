@@ -563,6 +563,24 @@ export class SalesDocHistoryService {
   /** Cost of goods of every stored SalesDoc order from today's product costs (history keeps no past costs). */
   static recomputeCogs(companyId: string) {
     const products = db.find('products', p => p.company_id === companyId);
+    // Build the SKU indexes once. Filtering and rebuilding this map for every order
+    // made a full history import scale as orders × products and could block Render's
+    // event loop long enough to fail its 5 second health check.
+    const productsByIntegration = new Map<string, Map<string, Product>>();
+    const allProducts = new Map<string, Product>();
+    for (const product of products) allProducts.set(product.sku, product);
+    const productsForOrder = (integrationId?: string | null) => {
+      if (!integrationId) return allProducts;
+      let indexed = productsByIntegration.get(integrationId);
+      if (!indexed) {
+        indexed = new Map<string, Product>();
+        for (const product of products) {
+          if (!product.source_integration_id || product.source_integration_id === integrationId) indexed.set(product.sku, product);
+        }
+        productsByIntegration.set(integrationId, indexed);
+      }
+      return indexed;
+    };
     const orders = db.find('sales_orders', o => o.company_id === companyId && !!o.external_id && o.source === 'DISTRIBUTION');
     const orderIds = new Set(orders.map(o => o.id));
     const itemsByOrder = new Map<string, SalesOrderItem[]>();
@@ -576,7 +594,7 @@ export class SalesDocHistoryService {
     const itemRows: SalesOrderItem[] = [];
     for (const order of orders) {
       const items = itemsByOrder.get(order.id) || [];
-      const orderProducts = new Map<string, Product>(products.filter(p => !order.source_integration_id || !p.source_integration_id || p.source_integration_id === order.source_integration_id).map(p => [p.sku, p]));
+      const orderProducts = productsForOrder(order.source_integration_id);
       const cogs = computeOrderCogs(items.map(i => ({ sku: i.sku || i.product_id, name: i.product_name, quantity: i.quantity, price: i.unit_price, total: i.total_amount })), orderProducts);
       if (order.cogs_status !== cogs.status || order.total_cogs !== cogs.total) {
         orderRows.push({ ...order, total_cogs: cogs.total, cogs_status: cogs.status, gross_profit: cogs.status === 'KNOWN' ? order.net_sales - cogs.total : 0 });
