@@ -73,6 +73,10 @@ function lastBackupAgeHours(): number {
 export function startBackupScheduler(): NodeJS.Timeout {
   const check = () => {
     try {
+      // Turso is the durable database on hosted deployments. The local SQLite file
+      // is only a cache there; checkpointAll() would synchronously rewrite every
+      // row on the single-core free instance and stall health checks during boot.
+      if (db.isTursoEnabled()) return;
       const hour = Number(new Date().toLocaleString('en-GB', { timeZone: 'Asia/Tashkent', hour: '2-digit', hour12: false }));
       const todays = listBackups().some(b => b.kind === 'daily' && b.name === `finance-${businessToday()}.sqlite`);
       if ((!todays && hour >= 2) || lastBackupAgeHours() > 26) {
