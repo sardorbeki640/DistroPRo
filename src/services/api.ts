@@ -46,6 +46,29 @@ export const removeStoredToken = (): void => {
   localStorage.removeItem(TOKEN_KEY);
 };
 
+let databaseReadyWait: Promise<void> | null = null;
+
+function waitForDatabaseReady(): Promise<void> {
+  if (!databaseReadyWait) {
+    const wait = (async () => {
+      const deadline = Date.now() + 5 * 60_000;
+      while (Date.now() < deadline) {
+        try {
+          const response = await fetch('/api/health', { cache: 'no-store' });
+          const health = await response.json();
+          if (health.status === 'ok') return;
+        } catch { /* Render may still be waking the instance. */ }
+        await new Promise(resolve => window.setTimeout(resolve, 5_000));
+      }
+      throw new Error('Server hali tayyor emas. Bir ozdan keyin sahifani yangilang.');
+    })();
+    let wrapped: Promise<void>;
+    wrapped = wait.finally(() => { if (databaseReadyWait === wrapped) databaseReadyWait = null; });
+    databaseReadyWait = wrapped;
+  }
+  return databaseReadyWait;
+}
+
 async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = getStoredToken();
   const headers = new Headers(options.headers || {});
@@ -78,6 +101,10 @@ async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise
 
   if (!response.ok || data.success === false) {
     const errorMsg = data.error || data.message || `Server xatoligi: ${response.status}`;
+    if (response.status === 503 && String(errorMsg).includes('Tizim bazadagi ma’lumotlarni yuklamoqda')) {
+      await waitForDatabaseReady();
+      return fetchApi<T>(endpoint, options);
+    }
     // The status lets a screen tell "no permission" (403) from a real failure.
     throw Object.assign(new Error(errorMsg), { status: response.status });
   }

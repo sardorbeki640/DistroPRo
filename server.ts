@@ -92,7 +92,13 @@ async function startServer() {
     }
     next();
   });
-  if (process.env.NODE_ENV === 'production') app.use(express.static(path.join(process.cwd(), 'dist')));
+  const distPath = path.join(process.cwd(), 'dist');
+  if (process.env.NODE_ENV === 'production') {
+    app.use('/assets', express.static(path.join(distPath, 'assets'), { maxAge: '1y', immutable: true }));
+    app.use(express.static(distPath, { setHeaders: (res, filePath) => {
+      if (path.basename(filePath) === 'index.html') res.setHeader('Cache-Control', 'no-cache');
+    } }));
+  }
   const server = app.listen(PORT, HOST, () => {
     console.log(`Distribution Finance Server running on http://${HOST}:${PORT}`);
   });
@@ -186,7 +192,6 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });

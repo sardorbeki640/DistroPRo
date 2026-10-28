@@ -1,34 +1,39 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { Suspense, useState, useEffect, useCallback } from 'react';
 import { Header } from './components/Header.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
 import { LoginModal } from './components/LoginModal.tsx';
-import { DashboardView } from './components/views/DashboardView.tsx';
-import { DailyFilesView } from './components/views/DailyFilesView.tsx';
-import { CashView } from './components/views/CashView.tsx';
-import { AuditView } from './components/views/AuditView.tsx';
-import { IntegrationsView } from './components/views/IntegrationsView.tsx';
-import { SettingsView } from './components/views/SettingsView.tsx';
-import { ExpensesView } from './components/views/ExpensesView.tsx';
-import { CustomersView } from './components/views/CustomersView.tsx';
-import { EmployeesView } from './components/views/EmployeesView.tsx';
-import { ReportsView } from './components/views/ReportsView.tsx';
-import { BalanceView } from './components/views/BalanceView.tsx';
-import { ProductsView } from './components/views/ProductsView.tsx';
-import { ForecastView } from './components/views/ForecastView.tsx';
-import { ApkInstallModal } from './components/common/ApkInstallModal.tsx';
-import { QuickToolsModal } from './components/common/QuickToolsModal.tsx';
-import { AIAgentDrawer } from './components/common/AIAgentDrawer.tsx';
 import { ErrorBoundary } from './components/common/ErrorBoundary.tsx';
-import { JarvisView } from './components/views/JarvisView.tsx';
-import { PlaceholderView } from './components/views/PlaceholderView.tsx';
-import { CRMView } from './components/views/CRMView.tsx';
-import { CabinetView } from './components/views/CabinetView.tsx';
-import { AttendanceView } from './components/views/AttendanceView.tsx';
-import { ChangePasswordModal } from './components/common/ChangePasswordModal.tsx';
 import { canOpen, homeView } from './utils/permissions.ts';
 import { api, getStoredToken, removeStoredToken } from './services/api.ts';
 import { AuthUser, CashDay, CashTransaction, NavView } from './types.ts';
 import { Sparkles } from 'lucide-react';
+
+// Keep the first download small: operational pages are loaded only when opened.
+const DashboardView = React.lazy(() => import('./components/views/DashboardView.tsx').then(m => ({ default: m.DashboardView })));
+const DailyFilesView = React.lazy(() => import('./components/views/DailyFilesView.tsx').then(m => ({ default: m.DailyFilesView })));
+const CashView = React.lazy(() => import('./components/views/CashView.tsx').then(m => ({ default: m.CashView })));
+const AuditView = React.lazy(() => import('./components/views/AuditView.tsx').then(m => ({ default: m.AuditView })));
+const IntegrationsView = React.lazy(() => import('./components/views/IntegrationsView.tsx').then(m => ({ default: m.IntegrationsView })));
+const SettingsView = React.lazy(() => import('./components/views/SettingsView.tsx').then(m => ({ default: m.SettingsView })));
+const ExpensesView = React.lazy(() => import('./components/views/ExpensesView.tsx').then(m => ({ default: m.ExpensesView })));
+const CustomersView = React.lazy(() => import('./components/views/CustomersView.tsx').then(m => ({ default: m.CustomersView })));
+const EmployeesView = React.lazy(() => import('./components/views/EmployeesView.tsx').then(m => ({ default: m.EmployeesView })));
+const ReportsView = React.lazy(() => import('./components/views/ReportsView.tsx').then(m => ({ default: m.ReportsView })));
+const BalanceView = React.lazy(() => import('./components/views/BalanceView.tsx').then(m => ({ default: m.BalanceView })));
+const ProductsView = React.lazy(() => import('./components/views/ProductsView.tsx').then(m => ({ default: m.ProductsView })));
+const ForecastView = React.lazy(() => import('./components/views/ForecastView.tsx').then(m => ({ default: m.ForecastView })));
+const JarvisView = React.lazy(() => import('./components/views/JarvisView.tsx').then(m => ({ default: m.JarvisView })));
+const CRMView = React.lazy(() => import('./components/views/CRMView.tsx').then(m => ({ default: m.CRMView })));
+const CabinetView = React.lazy(() => import('./components/views/CabinetView.tsx').then(m => ({ default: m.CabinetView })));
+const AttendanceView = React.lazy(() => import('./components/views/AttendanceView.tsx').then(m => ({ default: m.AttendanceView })));
+const ApkInstallModal = React.lazy(() => import('./components/common/ApkInstallModal.tsx').then(m => ({ default: m.ApkInstallModal })));
+const QuickToolsModal = React.lazy(() => import('./components/common/QuickToolsModal.tsx').then(m => ({ default: m.QuickToolsModal })));
+const AIAgentDrawer = React.lazy(() => import('./components/common/AIAgentDrawer.tsx').then(m => ({ default: m.AIAgentDrawer })));
+const ChangePasswordModal = React.lazy(() => import('./components/common/ChangePasswordModal.tsx').then(m => ({ default: m.ChangePasswordModal })));
+
+function ViewLoading() {
+  return <div className="flex min-h-40 items-center justify-center text-sm text-neutral-500">Bo‘lim yuklanmoqda…</div>;
+}
 
 export default function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -56,14 +61,14 @@ export default function App() {
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      // 1. Dashboard stats
-      const statsRes = await api.getDashboardStats().catch(() => null);
+      const [statsRes, cashRes] = await Promise.all([
+        api.getDashboardStats().catch(() => null),
+        api.getCashStatus().catch(() => null),
+      ]);
       if (statsRes?.stats) {
         setStats(statsRes.stats);
       }
 
-      // 2. Cash status
-      const cashRes = await api.getCashStatus().catch(() => null);
       if (cashRes) {
         setCashDay(cashRes.currentDay);
         setTransactions(cashRes.transactions || []);
@@ -88,8 +93,8 @@ export default function App() {
           setCurrentView(homeView(res.user));
           await loadData();
           return;
-        } catch {
-          removeStoredToken();
+        } catch (err) {
+          if ((err as any)?.status === 401) removeStoredToken();
         }
       }
 
@@ -190,7 +195,7 @@ export default function App() {
   // A password issued by the owner must be replaced before anything else (the server enforces the same).
   if (user.must_change_password) return (
     <div className="min-h-screen bg-neutral-100">
-      <ChangePasswordModal forced onDone={async () => { const res = await api.getMe(); setUser(res.user); setCurrentView(homeView(res.user)); loadData(); }} />
+      <Suspense fallback={<ViewLoading />}><ChangePasswordModal forced onDone={async () => { const res = await api.getMe(); setUser(res.user); setCurrentView(homeView(res.user)); loadData(); }} /></Suspense>
     </div>
   );
 
@@ -222,7 +227,7 @@ export default function App() {
 
         <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8">
           <div className="mx-auto w-full min-w-0 max-w-7xl">
-            <ErrorBoundary resetKey={currentView}>{renderCurrentView()}</ErrorBoundary>
+            <ErrorBoundary resetKey={currentView}><Suspense fallback={<ViewLoading />}>{renderCurrentView()}</Suspense></ErrorBoundary>
           </div>
         </main>
       </div>
@@ -243,23 +248,23 @@ export default function App() {
       </button>}
 
       {/* Interactive Distro AI Agent Drawer */}
-      <AIAgentDrawer
+      {isAIAgentOpen && <Suspense fallback={null}><AIAgentDrawer
         isOpen={isAIAgentOpen}
         onClose={() => setIsAIAgentOpen(false)}
         onNavigateToForecast={() => {
           setIsAIAgentOpen(false);
           setCurrentView('forecast');
         }}
-      />
+      /></Suspense>}
 
       {/* Quick Cashier Tools (Denomination Counter, Currency Converter, Receipt Slip, Z-Report) */}
-      <QuickToolsModal
+      {isQuickToolsOpen && <Suspense fallback={null}><QuickToolsModal
         isOpen={isQuickToolsOpen}
         onClose={() => setIsQuickToolsOpen(false)}
         activeCashDay={cashDay}
         transactions={transactions}
         defaultTab={quickToolsTab}
-      />
+      /></Suspense>}
 
       {/* Login Modal for session initiation or manual credentials */}
       <LoginModal
@@ -272,10 +277,10 @@ export default function App() {
       />
 
       {/* Android APK / Mobile App Install Modal */}
-      <ApkInstallModal
+      {isApkModalOpen && <Suspense fallback={null}><ApkInstallModal
         isOpen={isApkModalOpen}
         onClose={() => setIsApkModalOpen(false)}
-      />
+      /></Suspense>}
     </div>
   );
 }
