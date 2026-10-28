@@ -159,7 +159,7 @@ export class SalesDocHistoryService {
           const orders = await this.fetchRange(adapter, config, from, to, !isLinko);
           // Switched off while this month was downloading: it is not stored.
           this.checkStop(integrationId);
-          const { stored, skipped } = this.storeOrders(companyId, userId, orders, state.errors, integrationId, true);
+          const { stored, skipped } = await this.storeOrders(companyId, userId, orders, state.errors, integrationId, true);
           state.chunks[month] = { from, to, orders: stored, skipped, synced_at: new Date().toISOString() };
           state.skipped += skipped;
           emptyStreak = stored ? 0 : emptyStreak + 1;
@@ -475,7 +475,22 @@ export class SalesDocHistoryService {
    * Rows are tagged with the integration. Orders read without lines (items undefined) keep their stored lines and cost.
    * createAgents: agents unknown locally are created from the order (Linko; SalesDoc agents come from its own list).
    */
-  private static storeOrders(companyId: string, userId: string, orders: ExternalSyncOrder[], errors: string[], integrationId?: string, createAgents = false) {
+  private static async storeOrders(companyId: string, userId: string, orders: ExternalSyncOrder[], errors: string[], integrationId?: string, createAgents = false) {
+    // A busy month can contain thousands of rows. Keep each transaction bounded and
+    // yield between batches so the free Render instance can answer health checks.
+    let stored = 0;
+    let skipped = 0;
+    const batchSize = 200;
+    for (let offset = 0; offset < orders.length; offset += batchSize) {
+      const result = this.storeOrdersChunk(companyId, userId, orders.slice(offset, offset + batchSize), errors, integrationId, createAgents);
+      stored += result.stored;
+      skipped += result.skipped;
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    return { stored, skipped };
+  }
+
+  private static storeOrdersChunk(companyId: string, userId: string, orders: ExternalSyncOrder[], errors: string[], integrationId?: string, createAgents = false) {
     const now = new Date().toISOString();
     let stored = 0;
     let skipped = 0;
