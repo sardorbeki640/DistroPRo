@@ -129,7 +129,10 @@ class DatabaseManager {
     const count = Number(this.sql.prepare('SELECT COUNT(*) AS n FROM rows').get().n);
     if (count === 0 && fs.existsSync(LEGACY_JSON) && fs.statSync(LEGACY_JSON).size > 0) {
       this.importLegacyJson();
-    } else {
+    } else if (!process.env.TURSO_DATABASE_URL?.trim() || !process.env.TURSO_AUTH_TOKEN?.trim()) {
+      // With Turso enabled, wait to hydrate until we know which snapshot is
+      // authoritative; holding both local and cloud copies can exceed a small
+      // host's memory limit during startup.
       this.reloadFromSqlite();
     }
     this.isLoaded = true;
@@ -163,13 +166,14 @@ class DatabaseManager {
 
     const client = createClient({ url, ...(authToken ? { authToken } : {}) });
     await client.execute('CREATE TABLE IF NOT EXISTS distropro_rows (tbl TEXT NOT NULL, k TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tbl, k))');
-    const result = await client.execute('SELECT tbl, k, seq, data FROM distropro_rows ORDER BY tbl, seq');
-    const remoteRows = result.rows.map((r: any) => ({ tbl: String(r.tbl), k: String(r.k), seq: Number(r.seq), data: String(r.data) }));
+    const remoteCountResult = await client.execute('SELECT COUNT(*) AS n FROM distropro_rows');
+    const remoteCount = Number(remoteCountResult.rows[0]?.n || 0);
     const localCount = Number(this.sql.prepare('SELECT COUNT(*) AS n FROM rows').get().n);
 
-    if (remoteRows.length === 0) {
+    if (remoteCount === 0) {
       // First connection: preserve any existing SQLite data by seeding the empty Turso table.
-      if (localCount > 0) await this.writeTursoRows(client, this.sql.prepare('SELECT tbl, k, seq, data FROM rows ORDER BY tbl, seq').all());
+      if (localCount > 0) await this.writeTursoRows(client, this.sql.prepare('SELECT tbl, k, seq, data FROM rows ORDER BY tbl, seq').iterate());
+      this.reloadFromSqlite();
     } else {
       // Cloud is authoritative after the first sync. Replay the durable local outbox over the snapshot.
       const pending = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id').all() as TursoOutboxOp[];
@@ -177,7 +181,15 @@ class DatabaseManager {
       try {
         this.sql.exec('DELETE FROM rows');
         const put = this.sql.prepare('INSERT OR REPLACE INTO rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)');
-        for (const row of remoteRows) put.run(row.tbl, row.k, row.seq, row.data);
+        const pageSize = 250;
+        for (let offset = 0; offset < remoteCount; offset += pageSize) {
+          const page = await client.execute({
+            sql: 'SELECT tbl, k, seq, data FROM distropro_rows ORDER BY tbl, seq LIMIT ? OFFSET ?',
+            args: [pageSize, offset]
+          });
+          for (const row of page.rows as any[]) put.run(String(row.tbl), String(row.k), Number(row.seq), String(row.data));
+          if (page.rows.length === 0) break;
+        }
         this.applyOutboxToLocal(pending);
         this.sql.exec('COMMIT');
       } catch (error) {
@@ -205,14 +217,21 @@ class DatabaseManager {
     }
   }
 
-  private async writeTursoRows(client: Client, rows: any[]): Promise<void> {
+  private async writeTursoRows(client: Client, rows: Iterable<any>): Promise<void> {
     // Use a single HTTP batch per small chunk. Sequential execute() calls inside an
     // interactive transaction can leave the Turso stream idle long enough to expire.
-    for (let start = 0; start < rows.length; start += 50) {
-      const statements = rows.slice(start, start + 50).map(row => ({
+    let statements: any[] = [];
+    for (const row of rows) {
+      statements.push({
         sql: 'INSERT OR REPLACE INTO distropro_rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)',
         args: [row.tbl, row.k, Number(row.seq), row.data]
-      }));
+      });
+      if (statements.length === 50) {
+        await client.batch(statements, 'write');
+        statements = [];
+      }
+    }
+    if (statements.length) {
       await client.batch(statements, 'write');
     }
   }
