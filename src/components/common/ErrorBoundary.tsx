@@ -27,8 +27,8 @@ export class ErrorBoundary extends React.Component<{ resetKey?: string; children
         <div className="flex items-center gap-2 font-bold"><AlertTriangle className="h-5 w-5" />Bu bo‘limni ko‘rsatishda xatolik yuz berdi</div>
         <p className="text-xs">Boshqa bo‘limlar ishlayveradi. Muammo takrorlansa, shu yozuvni skrinshot qilib yuboring:</p>
         <pre className="max-h-32 overflow-auto rounded-lg bg-white/70 p-2 text-[11px] text-rose-800">{this.state.error.message}</pre>
-        <button onClick={() => this.setState({ error: null })} className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-rose-700">
-          <RefreshCw className="h-3.5 w-3.5" />Qayta urinish
+        <button onClick={() => window.location.reload()} className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-rose-700">
+          <RefreshCw className="h-3.5 w-3.5" />Sahifani yangilash
         </button>
       </div>
     );
