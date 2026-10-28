@@ -5,6 +5,10 @@ import { SalesDocHistoryService, type HistoryAdapter } from './salesdoc-history.
 
 // Runs the "sync every N" setting while the server is running. Nothing runs when the computer or server is off.
 const CHECK_EVERY_MS = 60_000;
+// A history import can be large on the free Render instance. If the process
+// was restarted while importing, let the API settle before resuming the same
+// work; otherwise each restart immediately starts another expensive import.
+const INTERRUPTED_HISTORY_COOLDOWN_MS = 15 * 60_000;
 const lastAttempt = new Map<string, number>();
 const genericRunning = new Set<string>();
 
@@ -27,8 +31,12 @@ export function runDueSyncs(now = Date.now()): string[] {
     if (integration.disabled) continue;
     const isSalesDoc = capabilitiesOf(adapter).history;
     const history = integration.config?.history;
-    // A download that was cut off by a restart is resumed right away.
-    const interrupted = isSalesDoc && ((history?.status === 'RUNNING' && !SalesDocHistoryService.isRunning(integration.id)) || history?.refetch_all === true);
+    // A download cut off by a restart is resumed after a cooldown, not on each boot.
+    const historyStartedAt = Date.parse(history?.started_at || '') || 0;
+    const interruptedPending = isSalesDoc
+      && ((history?.status === 'RUNNING' && !SalesDocHistoryService.isRunning(integration.id)) || history?.refetch_all === true);
+    const interrupted = interruptedPending && now - historyStartedAt >= INTERRUPTED_HISTORY_COOLDOWN_MS;
+    if (interruptedPending && !interrupted) continue;
     const last = Math.max(lastAttempt.get(integration.id) || 0, Date.parse(integration.last_sync_at || '') || 0);
     if (!interrupted && now - last < interval) continue;
     lastAttempt.set(integration.id, now);
