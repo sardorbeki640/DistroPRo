@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, Mail, Building2, AlertCircle, ArrowRight, ShieldCheck, Eye, EyeOff, X } from 'lucide-react';
+import { Lock, Mail, Building2, AlertCircle, ArrowRight, ShieldCheck, Eye, EyeOff, X, LoaderCircle } from 'lucide-react';
 import { api } from '../services/api.ts';
 import { AuthUser } from '../types.ts';
 
@@ -14,15 +14,50 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => 
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [systemReady, setSystemReady] = useState(false);
+  const [checkingSystem, setCheckingSystem] = useState(false);
   const [setupRequired, setSetupRequired] = useState(false);
   const [setupMode, setSetupMode] = useState<'local' | 'token' | 'environment'>('local');
   const [setupToken, setSetupToken] = useState('');
-  useEffect(() => {if(isOpen) fetch('/api/auth/setup').then(r=>r.json()).then(r=>{setSetupRequired(r.required);setSetupMode(r.mode || 'local');}).catch(()=>setError('Serverga ulanib bo‘lmadi'));},[isOpen]);
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    setCheckingSystem(true);
+    setSystemReady(false);
+    setError(null);
+
+    const check = async () => {
+      try {
+        const health = await fetch('/api/health', { cache: 'no-store' });
+        const status = health.ok ? await health.json() : null;
+        if (!cancelled && status?.status === 'ok') {
+          const response = await fetch('/api/auth/setup', { cache: 'no-store' });
+          if (!response.ok) throw new Error('Tizim sozlamalari olinmadi');
+          const setup = await response.json();
+          if (cancelled) return;
+          setSetupRequired(setup.required);
+          setSetupMode(setup.mode || 'local');
+          setSystemReady(true);
+          setCheckingSystem(false);
+          return;
+        }
+      } catch {
+        // Render's free instance can take a while to wake and restore Turso data.
+        // Keep the sign-in screen calm and retry instead of showing a false error.
+      }
+      if (!cancelled) timer = setTimeout(check, 2500);
+    };
+
+    void check();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (!systemReady) return;
     setError(null);
     setLoading(true);
 
@@ -64,6 +99,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => 
             <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600" />
             <span>Tizim RBAC va audit xavfsizlik protokollari bilan himoyalangan.</span>
           </div>
+
+          {!systemReady && (
+            <div role="status" aria-live="polite" className="mb-4 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+              <LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+              <span>{checkingSystem ? 'Server va ma’lumotlar bazasi tayyorlanmoqda. Render bepul rejimidan keyin bu bir necha daqiqa olishi mumkin; sahifa o‘zi tekshirib turibdi.' : 'Serverga ulanmoqda…'}</span>
+            </div>
+          )}
 
           {error && (
             <div className="mb-4 flex items-center gap-2 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">
@@ -119,10 +161,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => 
 
             <button
               type="submit"
-              disabled={loading || (setupRequired && setupMode === 'environment')}
+              disabled={!systemReady || loading || (setupRequired && setupMode === 'environment')}
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
             >
-              <span>{loading ? 'Tekshirilmoqda...' : setupRequired ? 'Egasi hisobini yaratish' : 'Tizimga kirish'}</span>
+              <span>{!systemReady ? 'Server tayyorlanmoqda…' : loading ? 'Tekshirilmoqda...' : setupRequired ? 'Egasi hisobini yaratish' : 'Tizimga kirish'}</span>
               <ArrowRight className="h-4 w-4" />
             </button>
           </form>
