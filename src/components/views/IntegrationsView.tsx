@@ -380,10 +380,11 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
         showReportsLink: res.connected !== false
       });
       refreshDistribution();
-      await fetchIntegrations();
-      // Load references for this exact connection immediately; keep the dialog open
-      // so payment and price types can be selected without reopening the settings.
-      await loadProviderLists(configForm.provider_name, res.integration_id);
+      // Saving should finish as soon as the server confirms persistence. Remote
+      // reference lists can be slow (or unavailable) and must not keep the Save
+      // button spinning after the settings have already been stored.
+      void fetchIntegrations();
+      void loadProviderLists(configForm.provider_name, res.integration_id);
       if (onRefresh) onRefresh();
     } catch (err: any) {
       setStatusMessage({
