@@ -191,8 +191,10 @@ class DatabaseManager {
     const client = createClient({ url, ...(authToken ? { authToken } : {}) });
     await client.execute('CREATE TABLE IF NOT EXISTS distropro_rows (tbl TEXT NOT NULL, k TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tbl, k))');
     const pageSize = 2000;
+    // Page on the composite primary key. Ordering/cursoring by seq had no matching
+    // index and forced Turso to rescan and resort the entire cloud table per page.
     const firstPage = await client.execute({
-      sql: 'SELECT tbl, k, seq, data FROM distropro_rows ORDER BY tbl, seq LIMIT ?',
+      sql: 'SELECT tbl, k, seq, data FROM distropro_rows ORDER BY tbl, k LIMIT ?',
       args: [pageSize]
     });
     const localCount = Number(this.sql.prepare('SELECT COUNT(*) AS n FROM rows').get().n);
@@ -210,19 +212,21 @@ class DatabaseManager {
         const put = this.sql.prepare('INSERT OR REPLACE INTO rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)');
         let page = firstPage;
         let lastTable = '';
-        let lastSeq = 0;
+        let lastKey = '';
         let restoredRows = 0;
         while (page.rows.length) {
           for (const row of page.rows as any[]) {
             put.run(String(row.tbl), String(row.k), Number(row.seq), String(row.data));
             lastTable = String(row.tbl);
-            lastSeq = Number(row.seq);
+            lastKey = String(row.k);
             if (++restoredRows % 25 === 0) await new Promise<void>(resolve => setImmediate(resolve));
           }
           if (page.rows.length < pageSize) break;
           page = await client.execute({
-            sql: 'SELECT tbl, k, seq, data FROM distropro_rows WHERE tbl > ? OR (tbl = ? AND seq > ?) ORDER BY tbl, seq LIMIT ?',
-            args: [lastTable, lastTable, lastSeq, pageSize]
+            // A row-value cursor matches the composite (tbl, k) primary key and
+            // avoids scanning the table again for every hydration page.
+            sql: 'SELECT tbl, k, seq, data FROM distropro_rows WHERE (tbl, k) > (?, ?) ORDER BY tbl, k LIMIT ?',
+            args: [lastTable, lastKey, pageSize]
           });
         }
         await this.applyOutboxToLocal(pending);

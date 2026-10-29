@@ -909,6 +909,10 @@ export const api = {
     });
   },
 
+  generateSalariesBulk: async (data: { employee_ids: string[]; period_month: string }): Promise<{ results: { employee_id: string; salary?: any; error?: string; skipped?: boolean }[] }> => {
+    return fetchApi('/api/salaries/generate-bulk', { method: 'POST', body: JSON.stringify(data) });
+  },
+
   approveSalary: async (salaryId: string): Promise<{ salary: any }> => {
     return fetchApi(`/api/salaries/${salaryId}/approve`, {
       method: 'POST'

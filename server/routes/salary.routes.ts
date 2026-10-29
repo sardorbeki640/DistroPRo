@@ -14,6 +14,10 @@ const CalculateSalarySchema = z.object({
   employee_id: z.string().min(1, 'Xodim tanlanishi shart.'),
   period_month: z.string().regex(/^\d{4}-\d{2}$/, 'Davr YYYY-MM formatida bo\'lishi kerak.')
 });
+const BulkCalculateSalarySchema = z.object({
+  employee_ids: z.array(z.string().min(1)).min(1).max(300),
+  period_month: z.string().regex(/^\d{4}-\d{2}$/, 'Davr YYYY-MM formatida bo\'lishi kerak.')
+});
 
 const PaySalarySchema = z.object({
   salary_id: z.string().min(1, 'Maosh hujjati tanlanishi shart.'),
@@ -214,6 +218,24 @@ router.post('/generate', requireAuth, requirePermission('salary', 'create'), (re
   } catch (err) {
     next(err);
   }
+});
+
+/** Generate monthly statements for several explicitly selected employees in one request. */
+router.post('/generate-bulk', requireAuth, requirePermission('salary', 'create'), (req: Request, res: Response, next) => {
+  try {
+    const validated = BulkCalculateSalarySchema.parse(req.body);
+    const employeeIds = Array.from(new Set(validated.employee_ids));
+    const results: { employee_id: string; salary?: any; error?: string; skipped?: boolean }[] = [];
+    for (const employee_id of employeeIds) {
+      const existing = db.findOne('salaries', s => s.company_id === req.user!.companyId && s.employee_id === employee_id && s.period_month === validated.period_month);
+      if (existing?.status === 'PAID') { results.push({ employee_id, salary: existing, skipped: true }); continue; }
+      try {
+        const salary = SalaryService.generateSalaryRecord({ company_id: req.user!.companyId, employee_id, period_month: validated.period_month, user_id: req.user!.userId, user_email: req.user!.email });
+        results.push({ employee_id, salary });
+      } catch (error: any) { results.push({ employee_id, error: error?.message || 'Hisoblab bo‘lmadi.' }); }
+    }
+    res.status(201).json({ success: true, results });
+  } catch (err) { next(err); }
 });
 
 /**

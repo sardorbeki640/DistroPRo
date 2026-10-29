@@ -150,7 +150,10 @@ async function startServer() {
       void db.flushTurso().then(() => sendJson(body)).catch(error => {
         console.error('[Turso] Yozuv server javobidan oldin tasdiqlanmadi:', error.message);
         res.status(503);
-        sendJson({ success: false, error: 'Ma’lumot Turso bazasiga saqlanmadi. Internet yoki baza sozlamasini tekshirib, keyin qayta urinib ko‘ring.' });
+        const blocked = String(error?.code || '').toUpperCase() === 'BLOCKED' || /SQL read operations are forbidden|operation was blocked/i.test(String(error?.message || ''));
+        sendJson({ success: false, error: blocked
+          ? 'Turso bazasi hozir o‘qish/yozishni bloklagan. Turso boshqaruv panelida baza holati va foydalanish limitlarini tekshiring. Amal bazada tasdiqlanmadi.'
+          : 'Ma’lumot Turso bazasiga saqlanmadi. Ulanish holatini tekshirib, keyin qayta urinib ko‘ring.' });
       });
       return res;
     }) as typeof res.json;

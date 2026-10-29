@@ -525,7 +525,8 @@ export class AttendanceService {
     const rules = new Map((s.rules || []).filter(r => r.active).map(r => [r.type, r]));
     const list: { date: string; type: ViolationType; source: 'AUTO' | 'MANUAL'; id?: string; note?: string; minutes?: number; percent: number }[] = [];
     for (const r of this.days(company_id, s, `${month}-01`, last, employee_id)) {
-      if (rules.has('LATE') && r.late_minutes > 0) list.push({ date: r.date, type: 'LATE', source: 'AUTO', minutes: r.late_minutes, percent: 0 });
+      // Respect the per-rule permission: an excuse clears only the penalty types that allow it.
+      if (rules.has('LATE') && r.late_minutes > 0 && (!r.excused || rules.get('LATE')!.excuses_allowed === false)) list.push({ date: r.date, type: 'LATE', source: 'AUTO', minutes: r.late_minutes, percent: 0 });
       if (rules.has('ABSENT') && r.status === 'ABSENT') list.push({ date: r.date, type: 'ABSENT', source: 'AUTO', percent: 0 });
       // An excused day without a start is a permitted absence only where the rule accepts excuses.
       if (rules.has('ABSENT') && r.status === 'EXCUSED' && !r.first_in && rules.get('ABSENT')!.excuses_allowed === false) list.push({ date: r.date, type: 'ABSENT', source: 'AUTO', percent: 0 });

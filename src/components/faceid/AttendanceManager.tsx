@@ -130,7 +130,7 @@ const ReportTab: React.FC<{ employees: any[]; isAdmin: boolean; onError: (e: str
                 <td className={`px-3 text-right ${r.late_minutes ? 'font-bold text-amber-700' : ''}`}>{r.late_minutes ? `${r.late_minutes} daq` : '—'}</td>
                 <td className={`px-3 text-right ${r.early_minutes ? 'font-bold text-amber-700' : ''}`}>{r.early_minutes ? `${r.early_minutes} daq` : '—'}</td>
                 <td className="px-3 text-right">{rulesMode ? (r.penalty_percent ? <span title={(r.violations || []).join(', ')} className="font-bold text-rose-700">{r.penalty_percent}%</span> : '—') : (r.penalty ? money(r.penalty) : '—')}</td>
-                <td className="px-3 text-right">{isAdmin && (rulesMode ? (r.status === 'ABSENT' || r.status === 'EXCUSED') : (r.late_minutes || r.early_minutes || r.status === 'ABSENT' || r.status === 'EXCUSED')) && <button onClick={() => { setExcuseTarget(r); setExcuseReason(''); }} className="whitespace-nowrap text-[11px] font-semibold text-blue-700 hover:underline">{r.status === 'EXCUSED' ? 'Uzrni olish' : 'Sababli qilish'}</button>}</td>
+                <td className="px-3 text-right">{isAdmin && (rulesMode ? (r.status === 'ABSENT' || r.status === 'EXCUSED' || r.late_minutes > 0) : (r.late_minutes || r.early_minutes || r.status === 'ABSENT' || r.status === 'EXCUSED')) && <button onClick={() => { setExcuseTarget(r); setExcuseReason(''); }} className="whitespace-nowrap text-[11px] font-semibold text-blue-700 hover:underline">{r.status === 'EXCUSED' ? 'Uzrni olish' : r.late_minutes > 0 && r.status !== 'ABSENT' ? 'Jarimani sababli qilish' : 'Sababli qilish'}</button>}</td>
               </tr>
             ))}
           </tbody>
@@ -172,9 +172,13 @@ const ViolationsTab: React.FC<{ employees: any[]; isAdmin: boolean; onError: (e:
     try { await api.attendance.addViolation(form); onFlash('Qoidabuzarlik yozildi.'); setForm({ ...form, note: '' }); load(); } catch (err: any) { onError(err.message); }
   };
   const cancel = async (v: any) => {
-    const reason = prompt('Nega bekor qilinadi?');
+    const reason = prompt(v.source === 'AUTO' ? 'Bu kun uchun jarima nima sababdan bekor qilinadi?' : 'Jarima nima sababdan bekor qilinadi?');
     if (!reason) return;
-    try { await api.attendance.cancelViolation(v.id, reason); onFlash('Bekor qilindi.'); load(); } catch (err: any) { onError(err.message); }
+    try {
+      if (v.source === 'AUTO') await api.attendance.excuse(v.employee_id, v.date, true, reason);
+      else await api.attendance.cancelViolation(v.id, reason);
+      onFlash('Jarima bekor qilindi.'); load();
+    } catch (err: any) { onError(err.message); }
   };
   return (
     <div className="space-y-3">
@@ -218,7 +222,7 @@ const ViolationsTab: React.FC<{ employees: any[]; isAdmin: boolean; onError: (e:
                 <td className="px-3 text-right font-bold text-rose-700">{v.cancelled ? '—' : `${v.percent}%`}</td>
                 <td className="px-3">{v.source === 'AUTO' ? 'avtomatik' : 'qo‘lda'}</td>
                 <td className="px-3 max-w-xs truncate" title={v.note || v.cancel_reason || ''}>{v.cancelled ? `bekor: ${v.cancel_reason}` : v.note || ''}</td>
-                <td className="px-3 text-right">{isAdmin && v.source === 'MANUAL' && !v.cancelled && <button onClick={() => cancel(v)} className="text-[11px] font-semibold text-neutral-500 hover:text-red-600">Jarimani bekor qilish</button>}</td>
+                <td className="px-3 text-right">{isAdmin && !v.cancelled && (v.source === 'MANUAL' || v.type === 'LATE' || v.type === 'ABSENT') && <button onClick={() => cancel(v)} className="whitespace-nowrap text-[11px] font-semibold text-neutral-500 hover:text-red-600">Jarimani bekor qilish</button>}</td>
               </tr>
             ))}
           </tbody>

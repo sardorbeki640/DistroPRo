@@ -79,6 +79,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
     employee_id: '',
     period_month: currentMonth
   });
+  const [selectedPayrollIds, setSelectedPayrollIds] = useState<string[]>([]);
   const [calcBreakdown, setCalcBreakdown] = useState<any>(null);
   const [isCalculating, setIsCalculating] = useState<boolean>(false);
 
@@ -332,26 +333,27 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
     }
   };
 
-  /** Payroll of the month for every active employee who has a pay scheme; paid statements are left as they are. */
-  const handleGenerateAll = async () => {
-    const targets = employees.filter(e => e.status !== 'INACTIVE' && (e.pay_components || []).length > 0);
-    if (!targets.length) { setActionError('Maosh tarkibi kiritilgan faol xodim yo‘q.'); return; }
+  const handleGenerateSelected = async (employeeIds: string[]) => {
+    const targets = employees.filter(e => employeeIds.includes(e.id) && e.status !== 'INACTIVE');
+    if (!targets.length) { setActionError('Faol xodimlarni tanlang.'); return; }
     setIsCalculating(true);
     setActionError(null);
-    const failed: string[] = [];
-    let done = 0;
-    for (const e of targets) {
-      if (salaries.some(s => s.employee_id === e.id && s.status === 'PAID')) continue;
-      try { await api.generateSalary({ employee_id: e.id, period_month: calcForm.period_month }); done++; }
-      catch (err: any) { failed.push(`${e.full_name}: ${err.message}`); }
-    }
-    setIsCalculating(false);
-    if (failed.length) setActionError(`Ba’zilari hisoblanmadi — ${failed.join('; ')}`);
-    setActionSuccess(`${calcForm.period_month}: ${done} ta xodim uchun vedomost tuzildi.`);
-    setShowCalculateModal(false);
-    setCalcBreakdown(null);
-    loadData();
+    try {
+      const response = await api.generateSalariesBulk({ employee_ids: targets.map(e => e.id), period_month: calcForm.period_month });
+      const failed = response.results.filter(r => r.error).map(r => `${employees.find(e => e.id === r.employee_id)?.full_name || r.employee_id}: ${r.error}`);
+      const done = response.results.filter(r => r.salary && !r.skipped).length;
+      const skipped = response.results.filter(r => r.skipped).length;
+      if (failed.length) setActionError(`Hisoblanmagan xodimlar: ${failed.join('; ')}`);
+      setActionSuccess(`${calcForm.period_month}: ${done} ta vedomost tuzildi${skipped ? `, ${skipped} ta avval to‘langanligi uchun o‘zgartirilmadi` : ''}.`);
+      setShowCalculateModal(false);
+      setCalcBreakdown(null);
+      setSelectedPayrollIds([]);
+      loadData();
+    } catch (err: any) { setActionError(err.message); }
+    finally { setIsCalculating(false); }
   };
+
+  const handleGenerateAll = () => handleGenerateSelected(employees.filter(e => e.status !== 'INACTIVE').map(e => e.id));
 
   const handleApprove = async (salaryId: string) => {
     setActionError(null);
@@ -466,6 +468,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
           <button
             onClick={() => {
               setCalcForm({ employee_id: '', period_month: currentMonth });
+              setSelectedPayrollIds([]);
               setCalcBreakdown(null);
               setShowCalculateModal(true);
             }}
@@ -866,6 +869,22 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
                 </select>
               </div>
 
+              <div className="rounded-xl border border-neutral-200 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <label className="text-xs font-semibold text-neutral-700">Bir nechta xodimni tanlang</label>
+                  <button type="button" className="text-[11px] font-semibold text-emerald-700" onClick={() => {
+                    const eligible = employees.filter(e => e.status !== 'INACTIVE').map(e => e.id);
+                    setSelectedPayrollIds(selectedPayrollIds.length === eligible.length ? [] : eligible);
+                  }}>{selectedPayrollIds.length ? 'Tanlovni tozalash' : 'Barcha faol xodimlar'}</button>
+                </div>
+                <div className="max-h-32 space-y-1 overflow-y-auto">
+                  {employees.filter(e => e.status !== 'INACTIVE').map(emp => <label key={emp.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-neutral-50">
+                    <input type="checkbox" checked={selectedPayrollIds.includes(emp.id)} onChange={e => setSelectedPayrollIds(current => e.target.checked ? [...current, emp.id] : current.filter(id => id !== emp.id))} />
+                    <span>{emp.full_name}</span><span className="ml-auto text-neutral-400">{emp.position}</span>
+                  </label>)}
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-neutral-700">Hisobot Oyi</label>
                 <input
@@ -933,10 +952,19 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
               <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-neutral-200">
                 <button
                   type="button"
+                  onClick={() => handleGenerateSelected(selectedPayrollIds)}
+                  disabled={isCalculating || selectedPayrollIds.length === 0}
+                  className="rounded-lg border border-neutral-300 px-3 py-2 text-xs font-semibold text-neutral-800 hover:bg-neutral-50 disabled:opacity-50"
+                  title="Faqat tanlangan xodimlar uchun vedomost tuzish"
+                >
+                  Tanlanganlar uchun ({selectedPayrollIds.length})
+                </button>
+                <button
+                  type="button"
                   onClick={handleGenerateAll}
                   disabled={isCalculating}
                   className="mr-auto rounded-lg border border-neutral-300 px-3 py-2 text-xs font-semibold text-neutral-800 hover:bg-neutral-50 disabled:opacity-50"
-                  title="Maosh tarkibi kiritilgan barcha faol xodimlar uchun shu oy vedomostini tuzish"
+                  title="Barcha faol xodimlar uchun shu oy vedomostini tuzish"
                 >
                   Barcha faol xodimlar uchun
                 </button>
