@@ -13,7 +13,7 @@ import { tagIntegrationRows } from '../services/source-tagging.service.ts';
 const router = Router();
 
 /** Permanently remove a connection and its credentials while preserving, but hiding, its imported history. */
-router.delete('/connection/:id', requireAuth, requirePermission('integration', 'create'), (req: Request, res: Response, next) => {
+router.delete('/connection/:id', requireAuth, requirePermission('integration', 'create'), async (req: Request, res: Response, next) => {
   try {
     const companyId = req.user!.companyId;
     const target = db.findOne('integrations', i => i.id === req.params.id && i.company_id === companyId);
@@ -42,6 +42,7 @@ router.delete('/connection/:id', requireAuth, requirePermission('integration', '
       entity_id: target.id, old_value: { provider_name: target.provider_name, connection_name: target.config?.connection_name || '', server_url: target.config?.server_url || '' },
       new_value: null, reason: 'Server ulanishi va saqlangan kirish ma’lumotlari o‘chirildi; import tarixi yashirildi'
     });
+    await db.flushTurso();
     res.json({ success: true, message: 'Server ulanishi o‘chirildi. Avvalgi import tarixi o‘chmadi va ko‘rinmaydi.' });
   } catch (err) { next(err); }
 });
@@ -136,6 +137,7 @@ router.post('/:provider/enabled', requireAuth, requirePermission('integration', 
       company_id: companyId, user_id: req.user!.userId, user_email: req.user!.email, action: 'UPDATE', entity: 'Integration',
       entity_id: upperProvider, old_value: { disabled: !!record.disabled }, new_value: { disabled: !enabled }, reason: message
     });
+    await db.flushTurso();
     res.json({ success: true, message });
   } catch (err) {
     next(err);
@@ -143,7 +145,7 @@ router.post('/:provider/enabled', requireAuth, requirePermission('integration', 
 });
 
 /** Choose which connected distribution connection drives default reports and integration-backed screens. */
-router.post('/:provider/primary', requireAuth, requirePermission('integration', 'create'), (req: Request, res: Response, next) => {
+router.post('/:provider/primary', requireAuth, requirePermission('integration', 'create'), async (req: Request, res: Response, next) => {
   try {
     const companyId = req.user!.companyId;
     const provider = String(req.params.provider || '').toUpperCase();
@@ -169,6 +171,7 @@ router.post('/:provider/primary', requireAuth, requirePermission('integration', 
       entity_id: target.id, old_value: null, new_value: { provider_name: provider, integration_id: target.id, connection_name: target.config?.connection_name || '' },
       reason: `${target.config?.connection_name || provider} asosiy server sifatida tanlandi`
     });
+    await db.flushTurso();
     res.json({ success: true, message: `${target.config?.connection_name || provider} asosiy server qilindi.` });
   } catch (err) {
     next(err);
@@ -292,11 +295,14 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
     delete configPayload.uy_oplata_mode;
     if (configPayload.payment_types) delete configPayload.payment_types.HOME;
 
-    if (auth_type === 'SERVER_CREDENTIALS') {
+    const authTypeChanged = !!existing && String(existing.config?.auth_type || 'API_TOKEN').toUpperCase() !== String(configPayload.auth_type).toUpperCase();
+    if (configPayload.auth_type === 'SERVER_CREDENTIALS') {
       configPayload.username = (username || '').trim();
-      configPayload.password = password || (existing?.config?.password ?? '');
+      configPayload.password = password || (!authTypeChanged ? (existing?.config?.password ?? '') : '');
+      delete configPayload.api_token;
     } else {
-      configPayload.api_token = api_token || (existing?.config?.api_token ?? '');
+      configPayload.api_token = api_token || (!authTypeChanged ? (existing?.config?.api_token ?? '') : '');
+      delete configPayload.password;
     }
     if (req.body.history_start_date !== undefined) {
       if (req.body.history_start_date && !isValidIsoDate(req.body.history_start_date)) throw new Error('Tarix boshlanish sanasi YYYY-MM-DD bo‘lsin');
@@ -304,21 +310,21 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
     }
 
     const sourceChanged = !!existing && !sameConnectionSource(existing.config || {}, configPayload);
-    const requiresConnectionCheck = !existing || sourceChanged;
+    const requiresConnectionCheck = !existing || sourceChanged || existing.status !== 'CONNECTED';
     // Saving options such as dates and price types must not wait on a remote login
     // or trigger a full data sync. Verify only a new or changed data source.
     const check = requiresConnectionCheck
       ? await integrationProvider.getAdapter(upperProvider).testConnection(configPayload).catch((e: any) => ({ ok: false, message: e.message }))
       : { ok: existing!.status === 'CONNECTED', message: 'Ulanish sozlamalari o‘zgarmadi; faqat parametrlar saqlandi.' };
-    if (sourceChanged && !check.ok) {
-      res.status(400).json({ success: false, error: `Yangi server ulanishi tasdiqlanmadi; amaldagi ulanish va uning ma’lumotlari saqlab qolindi: ${check.message}`, integration_id: existing!.id, connected: false });
-      return;
-    }
+    // A failed edit of a live connection becomes a separate draft so the current
+    // working server remains untouched and the entered values can be corrected.
+    const failedLiveSourceEdit = !!existing && sourceChanged && !check.ok && existing.status === 'CONNECTED' && !existing.disabled;
+    const retryingFailedDraft = !!existing && existing.status === 'ERROR' && !existing.disabled && existing.config?.primary !== true;
     // Saving the settings of a switched-off integration does not switch it back on.
     const status: Integration['status'] = existing?.disabled ? 'DISCONNECTED' : check.ok ? 'CONNECTED' : 'ERROR';
 
     let recordId: string;
-    if (existing && sourceChanged) {
+    if (existing && sourceChanged && check.ok && !retryingFailedDraft) {
       // Preserve the previous source id so reports for the new endpoint cannot mix its imported history.
       tagIntegrationRows(existing.id);
       SalesDocHistoryService.stop(existing.id);
@@ -332,13 +338,29 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
         id: recordId, company_id: companyId, provider_type: existing.provider_type, provider_name: upperProvider,
         status, disabled: !!existing.disabled, config: configPayload, last_sync_at: null, created_at: new Date().toISOString()
       });
-    } else if (existing) {
+    } else if (existing && (!sourceChanged || retryingFailedDraft)) {
       recordId = existing.id;
+      // A corrected failed draft becomes connected in place. It only becomes the
+      // primary source when no other enabled primary integration exists.
+      if (retryingFailedDraft && check.ok) {
+        const otherPrimary = db.findOne('integrations', i => i.company_id === companyId && i.id !== existing.id && i.config?.primary === true && i.status === 'CONNECTED' && !i.disabled);
+        configPayload.primary = existing.config?.primary === true || !otherPrimary;
+      }
       db.update('integrations', existing.id, {
         config: configPayload,
         status
       });
     } else {
+      if (existing && sourceChanged && configPayload.connection_name === (existing.config?.connection_name || '')) {
+        const baseName = `${configPayload.connection_name || upperProvider} (yangi ulanish)`;
+        let draftName = baseName;
+        let suffix = 2;
+        while (db.findOne('integrations', i => i.company_id === companyId && i.provider_name.toUpperCase() === upperProvider && String(i.config?.connection_name || '').toLowerCase() === draftName.toLowerCase())) {
+          draftName = `${baseName} ${suffix++}`;
+        }
+        configPayload.connection_name = draftName;
+      }
+      if (failedLiveSourceEdit) configPayload.primary = false;
       recordId = `int-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const newRecord: Integration = {
         id: recordId,
@@ -372,10 +394,13 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
         : `${upperProvider} uchun server kabineti ulanish sozlamalari yangilandi`
     });
 
+    // Do not tell the UI that credentials were saved until the Turso outbox is durable.
+    await db.flushTurso();
+
     if (!check.ok) {
       // Keep the saved record addressable by the UI so it can show the exact connection
       // failure and let the owner retry without losing the values they just entered.
-      res.json({ success: true, connected: false, message: `Sozlamalar saqlandi, ammo ulanish tasdiqlanmadi: ${check.message}`, integration_id: recordId });
+      res.json({ success: true, connected: false, message: `Sozlamalar saqlandi, ammo ulanish tasdiqlanmadi: ${check.message}`, integration_id: recordId, connection_name: configPayload.connection_name });
       return;
     }
 
@@ -409,6 +434,7 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
       connected: true,
       message: `${upperProvider} ulandi va sozlamalar saqlandi${syncMsg}`,
       integration_id: recordId,
+      connection_name: configPayload.connection_name,
       sync: syncDetails
     });
   } catch (err) {
@@ -581,6 +607,7 @@ router.post('/sync', requireAuth, requirePermission('integration', 'create'), as
     const syncedIntegration = db.findOne('integrations', i => i.company_id === req.user!.companyId && i.provider_name.toUpperCase() === String(provider_name).toUpperCase() && (!integration_id || i.id === integration_id));
     if (syncedIntegration && result.status !== 'FAILED') tagIntegrationRows(syncedIntegration.id);
 
+    await db.flushTurso();
     res.json({
       success: true,
       result
@@ -604,11 +631,21 @@ router.post('/test-connection', requireAuth, requirePermission('integration', 'c
       (!integration_id || i.id === integration_id)
     );
 
-    // Form fields override saved ones, but an empty secret field means "use the saved secret".
+    // Form fields override saved ones, but an empty secret field means "use the saved secret"
+    // only while keeping the same authentication method. Never test with credentials from
+    // a different authentication mode after the user switches tabs.
     const saved = integrationRecord?.config || {};
-    const effectiveConfig = { ...saved, ...(config || {}) };
-    if (!config?.password) effectiveConfig.password = saved.password;
-    if (!config?.api_token) effectiveConfig.api_token = saved.api_token;
+    const savedAuthType = String(saved.auth_type || (saved.api_token ? 'API_TOKEN' : 'SERVER_CREDENTIALS')).toUpperCase();
+    const requestedAuthType = String(config?.auth_type || savedAuthType).toUpperCase();
+    const sameAuthType = savedAuthType === requestedAuthType;
+    const effectiveConfig = { ...saved, ...(config || {}), auth_type: requestedAuthType };
+    if (requestedAuthType === 'SERVER_CREDENTIALS') {
+      effectiveConfig.password = config?.password || (sameAuthType ? saved.password : '');
+      delete effectiveConfig.api_token;
+    } else {
+      effectiveConfig.api_token = config?.api_token || (sameAuthType ? saved.api_token : '');
+      delete effectiveConfig.password;
+    }
     const result = await adapter.testConnection(effectiveConfig);
 
     res.json({

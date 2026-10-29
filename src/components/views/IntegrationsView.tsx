@@ -372,7 +372,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
     setStatusMessage(null);
     try {
       const res = await api.saveIntegrationConfig(configForm);
-      setConfigForm(current => ({ ...current, integration_id: res.integration_id }));
+      setConfigForm(current => ({ ...current, integration_id: res.integration_id, connection_name: res.connection_name || current.connection_name }));
       setModalTestResult(res.connected === false ? { ok: false, message: res.message } : { ok: true, message: res.message });
       setStatusMessage({
         type: res.connected === false ? 'error' : 'success',

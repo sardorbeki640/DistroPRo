@@ -1200,7 +1200,7 @@ export const api = {
     auto_sync?: boolean;
     history_start_date?: string;
     forecast_days?: number;
-  }): Promise<{ success: boolean; connected?: boolean; message: string; integration_id: string }> => {
+  }): Promise<{ success: boolean; connected?: boolean; message: string; integration_id: string; connection_name?: string }> => {
     return fetchApi('/api/integrations/config', {
       method: 'POST',
       body: JSON.stringify(data)

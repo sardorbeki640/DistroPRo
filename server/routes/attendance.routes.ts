@@ -6,6 +6,7 @@ import { AttendanceService } from '../services/attendance.service.ts';
 import { SheetsService } from '../services/sheets.service.ts';
 import { StaffBotService } from '../services/staff-bot.service.ts';
 import { AuthService } from '../services/auth.service.ts';
+import { db } from '../db/database.ts';
 import { isValidIsoDate, businessToday } from '../utils/date.ts';
 
 /** Face ID attendance: check-in from the employee's phone, enrollment, settings, reports and review (managers). */
@@ -131,10 +132,11 @@ router.post('/events/:id/review', requireAuth, requirePermission('employee', 'up
     res.json({ success: true, event: AttendanceService.review(req.user!.companyId, req.params.id, body.decision, body.reason, who(req)) });
   } catch (e) { next(e); }
 });
-router.post('/excuse', requireAuth, requirePermission('employee', 'update'), requireOwner, (req, res, next) => {
+router.post('/excuse', requireAuth, requirePermission('employee', 'update'), requireOwner, async (req, res, next) => {
   try {
     const body = z.object({ employee_id: z.string(), date, excused: z.boolean(), reason: z.string().max(300) }).parse(req.body);
     AttendanceService.excuse(req.user!.companyId, body.employee_id, body.date, body.excused, body.reason, who(req));
+    await db.flushTurso();
     res.json({ success: true });
   } catch (e) { next(e); }
 });
@@ -145,14 +147,16 @@ router.get('/violations', requireAuth, requirePermission('employee', 'view'), (r
     res.json({ success: true, month, violations: AttendanceService.violations(req.user!.companyId, month) });
   } catch (e) { next(e); }
 });
-router.post('/violations', requireAuth, requirePermission('employee', 'update'), requireOwner, (req, res, next) => {
+router.post('/violations', requireAuth, requirePermission('employee', 'update'), requireOwner, async (req, res, next) => {
   try {
     const body = z.object({ employee_id: z.string(), date, type: z.enum(['LATE', 'ABSENT', 'NASIYA_MISUSE', 'TASK_LATE', 'OTHER']), note: z.string().max(300) }).parse(req.body);
-    res.status(201).json({ success: true, violation: AttendanceService.addViolation(req.user!.companyId, body, who(req)) });
+    const violation = AttendanceService.addViolation(req.user!.companyId, body, who(req));
+    await db.flushTurso();
+    res.status(201).json({ success: true, violation });
   } catch (e) { next(e); }
 });
-router.post('/violations/:id/cancel', requireAuth, requirePermission('employee', 'update'), requireOwner, (req, res, next) => {
-  try { AttendanceService.cancelViolation(req.user!.companyId, req.params.id, String(req.body?.reason || ''), who(req)); res.json({ success: true }); } catch (e) { next(e); }
+router.post('/violations/:id/cancel', requireAuth, requirePermission('employee', 'update'), requireOwner, async (req, res, next) => {
+  try { AttendanceService.cancelViolation(req.user!.companyId, req.params.id, String(req.body?.reason || ''), who(req)); await db.flushTurso(); res.json({ success: true }); } catch (e) { next(e); }
 });
 /** Pulls agents' first visits from SalesDoc for a period now (the scheduler does today every 10 minutes). */
 router.post('/sync-visits', requireAuth, requirePermission('employee', 'update'), async (req, res, next) => {

@@ -174,7 +174,7 @@ export class IntegrationProvider {
               last_in_stock_at: stockQty > 0 ? businessToday() : null,
               zero_stock_observed_at: null,
               stock_observed_at: businessToday(),
-              source: upperProvider.includes('SALES') ? 'SALESDOC' : '1C',
+              source: upperProvider === 'LINKO' ? 'LINKO' : upperProvider.includes('SALES') ? 'SALESDOC' : '1C',
               ...(integrationRecord ? { source_integration_id: integrationRecord.id } : {}),
               is_active: true,
               created_at: now
@@ -447,14 +447,12 @@ export class IntegrationProvider {
     const day=db.findOne('cash_days',d=>d.id===cashDayId && d.company_id===companyId);
     if(!day || day.status!=='OPEN') throw new Error('Faqat ochiq kassa kuni yangilanadi.');
     const now = new Date().toISOString();
-    // 1. Find active integration configuration
-    const integrations = db.find('integrations', i => i.company_id === companyId && i.status === 'CONNECTED');
-    // The cash register takes its orders from the connected distribution system (SalesDoc first, then Linko), never from Excel/manual.
-    const activeIntegration = integrations.find(i => i.provider_name === 'SALESDOC')
-      || integrations.find(i => i.provider_name.toUpperCase() === 'LINKO')
-      || integrations.find(i => i.provider_type === 'DISTRIBUTION' && this.adapters.get(i.provider_name.toUpperCase())?.providerType === 'DISTRIBUTION');
-    const isLinkoDay = activeIntegration?.provider_name.toUpperCase() === 'LINKO';
-    const systemLabel = isLinkoDay ? 'Linko' : 'SalesDoc';
+    // Cash and reports must follow the connection selected as primary in settings,
+    // regardless of whether that server is Linko, SalesDoc, or another adapter.
+    const integrations = db.find('integrations', i => i.company_id === companyId && i.status === 'CONNECTED' && !i.disabled && i.provider_type === 'DISTRIBUTION');
+    const activeIntegration = integrations.find(i => i.config?.primary === true)
+      || integrations.slice().sort((a, b) => String(b.last_sync_at || '').localeCompare(String(a.last_sync_at || '')))[0];
+    const systemLabel = activeIntegration?.provider_name || 'Distribyutor tizimi';
 
     let integratedOrders: any[] = [];
     if (activeIntegration && this.adapters.has(activeIntegration.provider_name.toUpperCase())) {

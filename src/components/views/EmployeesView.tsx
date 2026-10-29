@@ -479,6 +479,17 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
           </button>
 
           <button
+            onClick={() => {
+              setActiveTab('ATTENDANCE');
+            }}
+            className="flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800 shadow-xs hover:bg-rose-100"
+            title="Davomatdagi jarimalar, sababli kunlar va bekor qilish sabablarini boshqarish"
+          >
+            <AlertCircle className="h-4 w-4" />
+            <span>Jarimalar / sababli qilish</span>
+          </button>
+
+          <button
             onClick={handleOpenAddEmployee}
             className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 transition"
           >
@@ -566,11 +577,11 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
           }`}
         >
           <ScanFace className="h-4 w-4" />
-          <span>Davomat (Face ID)</span>
+          <span>Davomat va jarimalar</span>
         </button>
       </div>
 
-      {activeTab === 'ATTENDANCE' && <AttendanceManager employees={employees} />}
+      {activeTab === 'ATTENDANCE' && <AttendanceManager employees={employees} initialTab="violations" />}
 
       {/* Table: Monthly Payroll */}
       {activeTab === 'PAYROLL' && (

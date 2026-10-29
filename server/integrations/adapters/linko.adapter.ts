@@ -195,32 +195,20 @@ export class LinkoAdapter implements IntegrationAdapter {
     try {
       await this.login(config);
       const me = await this.get(config, '/main/user/auth-confirm/');
-      const counts: Record<string, number | string> = {};
-      for (const [name, path] of Object.entries(LinkoAdapter.PROBE_PATHS)) {
-        try {
-          const page = await this.get(config, path, { page_size: 1 });
-          const first = Array.isArray(page) ? page[0] : page?.results?.[0] ?? page;
-          counts[name] = Array.isArray(page) ? page.length : page?.count ?? '?';
-          console.log(`[LinkoProbe] ${name} ${path} count=${counts[name]} shape=${LinkoAdapter.shapeOf(first).join(' ')}`);
-        } catch (e: any) {
-          counts[name] = `xato: ${e.message}`;
-          console.log(`[LinkoProbe] ${name} ${path} ERROR ${e.message}`);
-        }
-      }
-      console.log(`[LinkoProbe] user shape=${LinkoAdapter.shapeOf(me).join(' ')}`);
-      // Which fields Linko wants to create a payment (read-only OPTIONS; nothing is written).
-      for (const path of LinkoAdapter.WRITE_PROBE_PATHS) {
-        try {
-          const schema = await this.describeWrite(config, path);
-          console.log(`[LinkoWriteProbe] ${path} allow=${schema.allow} POST=${schema.fields.join(' ') || '(yo‘q)'}`);
-        } catch (e: any) {
-          console.log(`[LinkoWriteProbe] ${path} ERROR ${e.message}`);
-        }
-      }
+      // Validate the three core read areas concurrently. The old connection check
+      // walked nine endpoints and four OPTIONS forms one-by-one, delaying Save for
+      // minutes on Linko free/slow servers. Detailed lists are fetched on demand.
+      const [orders, customers, products] = await Promise.all([
+        this.get(config, '/sales/order/', { page_size: 1 }),
+        this.get(config, '/market/market/', { page_size: 1 }),
+        this.get(config, '/main/product/', { page_size: 1 })
+      ]);
+      const count = (v: any) => Array.isArray(v) ? v.length : (Number.isFinite(Number(v?.count)) ? Number(v.count) : '?');
+      const counts = { orders: count(orders), customers: count(customers), products: count(products) };
       const who = me?.full_name || me?.username || config.username;
       return {
         ok: true,
-        message: `Linko'ga ulandi (${who}). Buyurtmalar: ${counts.orders}, mijozlar: ${counts.customers}. Ma'lumotlarni import qilish keyingi bosqichda yoqiladi.`,
+        message: `Linko ulandi (${who}). Asosiy ma’lumotlar tekshirildi: buyurtmalar ${counts.orders}, mijozlar ${counts.customers}, mahsulotlar ${counts.products}.`,
         latencyMs: Date.now() - t0,
         details: { counts }
       };

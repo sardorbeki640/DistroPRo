@@ -36,8 +36,8 @@ const money = (n: number) => Math.round(n || 0).toLocaleString('ru-RU');
 const input = 'mt-1 w-full rounded-lg border border-neutral-300 px-2.5 py-1.5 text-xs focus:border-neutral-900 focus:outline-hidden';
 
 /** Managers: Face ID attendance report, review of doubtful checks, enrollment and settings. */
-export const AttendanceManager: React.FC<{ employees: any[] }> = ({ employees }) => {
-  const [tab, setTab] = useState<Tab>('report');
+export const AttendanceManager: React.FC<{ employees: any[]; initialTab?: Tab }> = ({ employees, initialTab = 'report' }) => {
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [isAdmin, setIsAdmin] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
