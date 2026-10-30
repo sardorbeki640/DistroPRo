@@ -47,6 +47,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ user, onNavigateToPr
   const [outOfStockData, setOutOfStockData] = useState<OutOfStockResponse | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState<boolean>(false);
   const [syncNote, setSyncNote] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState<boolean>(false);
@@ -65,18 +66,17 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ user, onNavigateToPr
 
   const loadData = async (factor: number = runRateFactor) => {
     setLoading(true);
-    try {
-      const [rrRes, outRes] = await Promise.all([
-        api.getForecastRunRate(factor),
-        api.getOutOfStockLostProfit()
-      ]);
-      setRunRateData(rrRes);
-      setOutOfStockData(outRes);
-    } catch (err) {
-      console.error('Failed to load forecast data:', err);
-    } finally {
-      setLoading(false);
-    }
+    setLoadError(null);
+    const [rrRes, outRes] = await Promise.allSettled([
+      api.getForecastRunRate(factor), api.getOutOfStockLostProfit()
+    ]);
+    const errors: string[] = [];
+    if (rrRes.status === 'fulfilled') setRunRateData(rrRes.value);
+    else { setRunRateData(null); errors.push(`Zaxira prognozi: ${rrRes.reason?.message || 'olinmadi'}`); }
+    if (outRes.status === 'fulfilled') setOutOfStockData(outRes.value);
+    else { setOutOfStockData(null); errors.push(`Tugagan mahsulotlar: ${outRes.reason?.message || 'olinmadi'}`); }
+    setLoadError(errors.length ? errors.join('; ') : null);
+    setLoading(false);
   };
 
   const loadAIAnalysis = async () => {
@@ -172,6 +172,7 @@ export const ForecastView: React.FC<ForecastViewProps> = ({ user, onNavigateToPr
 
   return (
     <div className="space-y-6 pb-12">
+      {loadError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">Prognoz ma’lumotlari to‘liq olinmadi: {loadError}</div>}
       {syncNote && <div className="rounded-xl border p-3 bg-white text-xs">{syncNote}</div>}
       {runRateData?.history && <div className={`rounded-xl border p-4 text-sm ${runRateData.history.covered && runRateData.history.history_from ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-300'}`}>
         <strong>{runRateData.history.window_from} — {runRateData.history.window_to} ({runRateData.history.days} kunlik davr) · ma'lumot bor: {runRateData.history.covered_days} kun · {runRateData.history.orders} ta buyurtma</strong>
