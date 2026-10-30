@@ -130,6 +130,28 @@ test('non-SalesDoc sync: repeated payments are booked once, unknown customers ar
   } finally { for (const k of ['importProducts', 'importEmployees', 'importCustomers', 'importOrders', 'importPayments']) delete adapter[k]; }
 });
 
+test('SalesDoc price import warnings make the sync visibly partial', async () => {
+  db.insert('integrations', { id: 'sd-prices', company_id: 'c', provider_name: 'CUSTOM_SERVER', provider_type: 'DISTRIBUTION', status: 'CONNECTED', config: {}, created_at: today } as any);
+  const adapter = integrationProvider.getAdapter('CUSTOM_SERVER') as any;
+  const originals = Object.fromEntries(['importProducts', 'importEmployees', 'importCustomers', 'importOrders', 'importPayments'].map(k => [k, adapter[k]]));
+  adapter.lastImportWarnings = [];
+  adapter.importProducts = async () => { adapter.lastImportWarnings = ['Kirim narxlari SalesDoctor’dan olinmadi.']; return [{ sku: 'p1', name: 'Mahsulot', purchase_cost: 0, selling_price: 100, stock_quantity: 2 }]; };
+  adapter.importEmployees = async () => [];
+  adapter.importCustomers = async () => [];
+  adapter.importOrders = async () => [];
+  adapter.importPayments = async () => [];
+  try {
+    const result = await integrationProvider.syncProvider('c', 'CUSTOM_SERVER', 'u', 'u@test', 'sd-prices');
+    assert.equal(result.status, 'PARTIAL');
+    assert.ok(result.errors?.some(e => e.includes('Kirim narxlari')));
+  } finally {
+    for (const [key, value] of Object.entries(originals)) {
+      if (value === undefined) delete adapter[key]; else adapter[key] = value;
+    }
+    delete adapter.lastImportWarnings;
+  }
+});
+
 test('forecast divides by days of loaded history, not by days with no data', () => {
   db.insert('integrations', { id: 'sd', company_id: 'c', provider_name: 'SALESDOC', status: 'CONNECTED', config: { forecast_days: 100, history: { from: addDays(today, -19), status: 'COMPLETE' } }, created_at: today } as any);
   db.insert('products', { id: 'p', sku: 'p1', company_id: 'c', source_integration_id: 'sd', is_active: true, stock_quantity: 40, purchase_cost: 1, selling_price: 2 } as any);

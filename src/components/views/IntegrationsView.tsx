@@ -475,12 +475,16 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
       const saved = getSavedRecord(providerName);
       const label = saved?.system_name || providerName;
       const r = res.result || {};
+      const warnings = Array.isArray(r.errors) ? r.errors.filter((x: unknown) => typeof x === 'string' && x.trim()) : [];
+      const hasWarnings = warnings.length > 0 || r.status === 'PARTIAL';
       setStatusMessage({
-        type: r.status === 'FAILED' ? 'error' : 'success',
+        type: r.status === 'FAILED' || hasWarnings ? 'error' : 'success',
         text: r.details?.background
           ? `${label}: ${r.details.message}`
           : r.status === 'FAILED'
             ? `${label}: sinxronlanmadi. ${(r.errors || []).join('; ')}`
+            : hasWarnings
+              ? `${label}: ${r.recordsImported || 0} ta yozuv yangilandi, ammo to‘liq emas. ${warnings.join('; ') || 'Ayrim ma’lumotlar olinmadi.'}`
             : `${label}: ${r.recordsImported || 0} ta yozuv yangilandi, ${r.recordsFailed || 0} ta o'tkazib yuborildi.`,
         showReportsLink: !r.details?.background
       });

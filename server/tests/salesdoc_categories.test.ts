@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {SalesDocAdapter} from '../integrations/adapters/salesdoc.adapter.ts';
 
 /** A fake SalesDoc where getProduct gives only category/brand ids, as the real API does (9.4), and names come from 9.5 / 9.17. */
-function fakeServer(failCategories=false){
+function fakeServer(failCategories=false, failPrices=false){
  return async(_e:string,body:any)=>{
   const m=body.method;
   if(m==='login') return {status:true,result:{userId:'d0_1',token:'t'}};
@@ -24,6 +24,7 @@ function fakeServer(failCategories=false){
    {SD_id:'d0_3',code_1C:'000000003',name:'Оптом',type:'sale',active:'N'}
   ]},pagination:{total:3}};
   if(m==='getPrice'){
+   if(failPrices) return {status:false,error:{code:503,message:'price service unavailable'}};
    const t=body.params.priceType.SD_id;
    const table:any={d0_1:[[ 'd0_10',15000],['d0_11',3000]],d0_2:[['d0_10',1],['d0_11',2100]],d0_3:[['d0_10',14000]]};
    return {status:true,result:(table[t]||[]).map(([id,price]:any)=>({product:{SD_id:id,CS_id:id},price}))};
@@ -63,4 +64,12 @@ test('a failed category read keeps products importing',async()=>{
  const products=await a.importProducts({...config,server_url:'https://cat-test2.salesdoc.io/api/v2'});
  assert.equal(products.length,3);
  assert.ok(products.every((p:any)=>p.category==='Asosiy'));
+});
+
+test('price-list failures are retained as sync warnings instead of being hidden as success',async()=>{
+ const a=new SalesDocAdapter();(a as any).postSalesDocApi=fakeServer(false,true);
+ const products=await a.importProducts({...config,server_url:'https://price-fail-test.salesdoc.io/api/v2'});
+ assert.equal(products.length,3,'stock and product import can still complete');
+ assert.ok((products as any).warnings.some((w:string)=>w.includes('getPrice')||w.includes('SalesDoctor')));
+ assert.ok((products as any).warnings.some((w:string)=>w.includes('kirim narxi')));
 });

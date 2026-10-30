@@ -263,13 +263,25 @@ export class StaffBotService {
    * Chats seen are remembered on the bot so "Chatni topish" still finds them.
    */
   static async pollUpdates(bot: NotificationChannel) {
+    const retryAt = Date.parse(String(bot.config.poll_retry_after || ''));
+    if (Number.isFinite(retryAt) && retryAt > Date.now()) return 0;
     const offset = Number(bot.config.update_offset || 0);
     let updates: any[];
     try {
       updates = await TelegramService.getUpdates(bot.config.bot_token!, { offset: offset ? offset + 1 : undefined, limit: 100, timeout: 0, allowed_updates: ['message', 'my_chat_member', 'channel_post'] });
     } catch (err: any) {
       const fresh = db.findById('notification_channels', bot.id);
-      if (fresh) db.update('notification_channels', bot.id, { config: { ...fresh.config, poll_error: err.message, last_poll_at: new Date().toISOString() } });
+      if (fresh) {
+        const failures = Math.min(8, Number(fresh.config.poll_failures || 0) + 1);
+        const delaySeconds = Math.min(300, 20 * (2 ** (failures - 1)));
+        db.update('notification_channels', bot.id, { config: {
+          ...fresh.config,
+          poll_error: err?.message || 'Telegram bilan aloqa uzildi.',
+          poll_failures: failures,
+          poll_retry_after: new Date(Date.now() + delaySeconds * 1000).toISOString(),
+          last_poll_at: new Date().toISOString()
+        } });
+      }
       console.warn('[StaffBot] getUpdates:', err.message);
       return 0;
     }
@@ -326,7 +338,7 @@ export class StaffBotService {
       }
     }
     const fresh = db.findById('notification_channels', bot.id);
-    if (fresh) db.update('notification_channels', bot.id, { config: { ...fresh.config, update_offset: last, recent_chats: recent.slice(0, 20), last_update: lastUpdate, poll_error: null, last_poll_at: new Date().toISOString() } });
+    if (fresh) db.update('notification_channels', bot.id, { config: { ...fresh.config, update_offset: last, recent_chats: recent.slice(0, 20), last_update: lastUpdate, poll_error: null, poll_failures: 0, poll_retry_after: null, last_poll_at: new Date().toISOString() } });
     return updates.length;
   }
 

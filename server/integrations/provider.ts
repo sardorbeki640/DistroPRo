@@ -149,6 +149,8 @@ export class IntegrationProvider {
       // 1. Products
       if (typeof adapter.importProducts === 'function') {
         const products = await adapter.importProducts(config);
+        const importWarnings = (products as any).warnings || (adapter as any).lastImportWarnings;
+        if (Array.isArray(importWarnings)) errors.push(...importWarnings.filter((warning: unknown): warning is string => typeof warning === 'string' && !!warning.trim()).slice(0, 20));
         for (const p of products) {
           if (!p?.sku) { recordsFailed++; continue; }
           const existingProd = db.findOne('products', prod => prod.company_id === companyId && prod.sku === String(p.sku)
@@ -405,7 +407,7 @@ export class IntegrationProvider {
 
       return {
         provider: upperProvider,
-        status: recordsFailed ? 'PARTIAL' : 'SUCCESS',
+        status: recordsFailed || errors.length ? 'PARTIAL' : 'SUCCESS',
         recordsImported,
         recordsFailed,
         errors: errors.slice(0, 50),

@@ -146,3 +146,25 @@ test('agents get their customers’ debts in the morning',async()=>{
  assert.match(n[0].content,/Do‘kon 1/);
  assert.doesNotMatch(n[0].content,/Do‘kon 2/);
 });
+
+test('failed Telegram polling backs off and resumes cleanly after the network returns',async()=>{
+ company();
+ const bot=await personalBot();
+ let calls=0;
+ TelegramService.fetchImpl=(async()=>{calls++;throw Object.assign(new TypeError('fetch failed'),{cause:{code:'ECONNRESET'}});}) as any;
+ await StaffBotService.pollUpdates(db.findById('notification_channels',bot.id)!);
+ const failed=db.findById('notification_channels',bot.id)!;
+ assert.equal(failed.config.poll_failures,1);
+ assert.match(failed.config.poll_error,/ECONNRESET/);
+ assert.ok(Date.parse(failed.config.poll_retry_after)>Date.now());
+ await StaffBotService.pollUpdates(failed);
+ assert.equal(calls,1,'does not hammer Telegram while its retry window is active');
+
+ TelegramService.fetchImpl=(async(_url:string,init:any)=>({status:200,json:async()=>({ok:true,result:[]})}) as any) as any;
+ db.update('notification_channels',bot.id,{config:{...failed.config,poll_retry_after:'2000-01-01T00:00:00.000Z'}} as any);
+ await StaffBotService.pollUpdates(db.findById('notification_channels',bot.id)!);
+ const recovered=db.findById('notification_channels',bot.id)!;
+ assert.equal(recovered.config.poll_failures,0);
+ assert.equal(recovered.config.poll_retry_after,null);
+ assert.equal(recovered.config.poll_error,null);
+});

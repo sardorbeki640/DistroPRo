@@ -346,25 +346,33 @@ export class SalesDocAdapter implements IntegrationAdapter {
    * All price types (active or not) and, per product SD_id/CS_id, its price in each type: { [typeId]: price }.
    * A type whose prices cannot be read is listed with no prices; the import goes on.
    */
-  public async readPriceLists(config: Record<string, any>): Promise<{ types: SalesDocPriceType[]; prices: Map<string, Record<string, number>> }> {
+  public async readPriceLists(config: Record<string, any>): Promise<{ types: SalesDocPriceType[]; prices: Map<string, Record<string, number>>; warnings: string[] }> {
     const prices = new Map<string, Record<string, number>>();
+    const warnings: string[] = [];
     let raw: any[] = [];
     try {
       raw = await this.readAll(config, 'getPriceType', 'priceType');
     } catch (err: any) {
-      console.warn('[SalesDocAdapter] getPriceType:', err.message);
+      const message = this.errorMessage(err);
+      warnings.push(`Narx turlari olinmadi: ${message}`);
+      console.warn('[SalesDocAdapter] getPriceType:', message);
     }
     const types = this.toPriceTypes(raw);
+    if (!types.length && !warnings.length) warnings.push('SalesDoctor narx turlari ro‘yxati bo‘sh — kirim va sotuv narxlari import qilinmadi.');
     for (const type of types) {
       // SD_id identifies the type in SalesDoc; code_1C is tried only if SD_id gives nothing (older setups).
       const attempts = [type.ref.SD_id ? { SD_id: type.ref.SD_id } : null, type.ref.CS_id ? { CS_id: type.ref.CS_id } : null, type.ref.code_1C ? { code_1C: type.ref.code_1C } : null].filter(Boolean);
+      const attemptErrors: string[] = [];
+      let loaded = false;
       for (const priceType of attempts) {
         let rows: any[] = [];
         try {
           const result = await this.executeSalesDocMethod(config, 'getPrice', { priceType });
           rows = Array.isArray(result) ? result : (result?.price || result?.prices || []);
         } catch (err: any) {
-          console.warn(`[SalesDocAdapter] getPrice ${type.name}:`, err.message);
+          const message = this.errorMessage(err);
+          console.warn(`[SalesDocAdapter] getPrice ${type.name}:`, message);
+          attemptErrors.push(message);
           continue;
         }
         let found = 0;
@@ -378,10 +386,17 @@ export class SalesDocAdapter implements IntegrationAdapter {
           }
           found++;
         }
-        if (found) break;
+        if (found) { loaded = true; break; }
       }
+      if (!loaded && attemptErrors.length) warnings.push(`${type.name}: ${attemptErrors[attemptErrors.length - 1]}`);
     }
-    return { types, prices };
+    return { types, prices, warnings };
+  }
+
+  private errorMessage(error: unknown): string {
+    if (error instanceof Error && error.message.trim()) return error.message;
+    if (typeof error === 'string' && error.trim()) return error;
+    return 'SalesDoctor aniq xato matnini qaytarmadi';
   }
 
   public toPriceTypes(raw: any[]): SalesDocPriceType[] {
@@ -604,13 +619,24 @@ export class SalesDocAdapter implements IntegrationAdapter {
       }
 
       // Every price type of SalesDoc with its prices, exactly as listed there (9.8 getPriceType, 9.9 getPrice).
-      const { types: priceTypes, prices: priceLists } = await this.readPriceLists(config);
+      const { types: priceTypes, prices: priceLists, warnings: priceWarnings } = await this.readPriceLists(config);
       const chosenSalePriceTypes = Array.isArray(config.sale_price_type_ids) ? config.sale_price_type_ids.map(String) : [];
       const saleType = this.pickPriceType(priceTypes, 'sale', chosenSalePriceTypes[0] || config.sale_price_type_id);
       const costType = this.pickPriceType(priceTypes, 'purchase', config.purchase_price_type_id);
+      const importWarnings = [...priceWarnings];
+      if (!costType && priceTypes.length) importWarnings.push('Kirim/tannarx narx turi tanlanmagan yoki SalesDoctor’da topilmadi.');
+      if (!saleType && priceTypes.length) importWarnings.push('Sotuv narx turi tanlanmagan yoki SalesDoctor’da topilmadi.');
+
+      if (costType && productList.length) {
+        const missingCostCount = productList.filter((p: any) => {
+          const own = priceLists.get(String(p.SD_id)) || priceLists.get(String(p.CS_id)) || {};
+          return !(Number(own[costType.id]) > 1);
+        }).length;
+        if (missingCostCount) importWarnings.push(`${missingCostCount} ta mahsulotda kirim narxi yo‘q yoki 1 so‘m; foyda hisobida ular noma’lum deb olinadi.`);
+      }
 
       if (productList.length > 0) {
-        return productList.map((p: any) => {
+        const products = productList.map((p: any) => {
           const key = p.code_1C || p.SD_id || p.CS_id || `SD-${Math.random().toString(36).slice(2, 7)}`;
           const stock = stockMap.get(p.SD_id) ?? stockMap.get(p.CS_id) ?? 0;
           
@@ -636,6 +662,8 @@ export class SalesDocAdapter implements IntegrationAdapter {
             brand: p.brand?.name || this.referenceName(brandNames, p.brand) || undefined
           };
         });
+        Object.defineProperty(products, 'warnings', { value: importWarnings, enumerable: false });
+        return products;
       }
     } catch (err: any) {
       throw err;

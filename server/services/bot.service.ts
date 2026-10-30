@@ -113,7 +113,7 @@ export class BotService {
       topic_id: String(input.topic_id || '').trim() || undefined,
       daily_report_hour: hour,
       ...personalCfg,
-      ...(tokenChanged ? { update_offset: 0, recent_chats: [], last_poll_at: null, poll_error: null } : {})
+      ...(tokenChanged ? { update_offset: 0, recent_chats: [], last_poll_at: null, poll_error: null, poll_failures: 0, poll_retry_after: null } : {})
     };
     const id = existing?.id || `chan-tg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     db.transaction(() => {

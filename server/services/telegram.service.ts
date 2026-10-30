@@ -31,7 +31,11 @@ export class TelegramService {
         signal: AbortSignal.timeout(15000)
       });
     } catch (err: any) {
-      throw new TelegramError(`Telegram bilan aloqa yo‘q (${err?.name === 'TimeoutError' ? 'vaqt tugadi' : err?.message || 'tarmoq xatosi'}).`, false);
+      const code = String(err?.cause?.code || err?.code || '').trim();
+      const reason = err?.name === 'TimeoutError' || err?.name === 'AbortError'
+        ? 'vaqt tugadi'
+        : code ? `tarmoq xatosi: ${code}` : 'tarmoq xatosi';
+      throw new TelegramError(`Telegram bilan aloqa yo‘q (${reason}).`, false);
     }
     const data: any = await res.json().catch(() => null);
     if (data?.ok) return data.result;
