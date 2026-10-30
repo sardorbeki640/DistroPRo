@@ -27,13 +27,13 @@ router.get('/stats', requireAuth, requirePermission('reports', 'view'), (req: Re
     const currentCashDay = activeRegister ? CashService.getCurrentCashDay(companyId, activeRegister.id) : null;
     const transactions = currentCashDay ? CashService.getDayTransactions(currentCashDay.id) : [];
 
-    // Daily sales and profit by the same rules as the P&L report: no percentage guess for unknown cost.
-    const salesOrders = db.find('sales_orders', o => o.company_id === companyId && sourceMatches(o) && o.order_date === today && o.status !== 'CANCELLED');
-    let grossSales = salesOrders.reduce((sum, o) => sum + o.total_sales, 0);
+    // Use the P&L's recognized revenue (delivered orders only) for the sales KPI.
+    // Pending orders are returned separately so they cannot inflate actual sales.
+    const pnl = AnalyticsService.getProfitAndLoss(companyId, today, today, integrationId || null);
+    let grossSales = pnl.gross_sales;
     if (grossSales === 0 && currentCashDay) {
       grossSales = (currentCashDay.cash_payment || 0) + (currentCashDay.terminal_payment || 0) + (currentCashDay.click_payment || 0) + (currentCashDay.credit_sale || 0);
     }
-    const pnl = AnalyticsService.getProfitAndLoss(companyId, today, today, integrationId || null);
 
     const todayExpenses = db.find('expenses', e => e.company_id === companyId && e.status === 'CONFIRMED' && e.date === today);
     const totalExpenses = todayExpenses.reduce((sum, e) => sum + e.amount, 0);
@@ -64,6 +64,7 @@ router.get('/stats', requireAuth, requirePermission('reports', 'view'), (req: Re
         cashDay: currentCashDay,
         activeTransactionsCount: transactions.length,
         dailySales: grossSales,
+        pendingSales: pnl.pending_sales,
         grossProfit,
         operatingExpenses: totalExpenses,
         netProfit,

@@ -281,9 +281,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <p className="mt-2 text-xl font-black tracking-tight text-neutral-900">
             {formatUZS(stats?.dailySales || 0)}
           </p>
-          <div className="mt-1 flex items-center justify-between text-[11px] text-neutral-500">
-            <span>Yalpi sotuv hajmi</span>
-            <span className="font-semibold text-indigo-700">Real Buyurtmalar</span>
+          <div className="mt-1 flex flex-col gap-0.5 text-[11px] text-neutral-500">
+            <span>Yetkazilgan savdo</span>
+            {(stats?.pendingSales || 0) > 0 && (
+              <span className="font-medium text-amber-700">Kutilayotgan buyurtmalar (hisobga olinmagan): {formatUZS(stats.pendingSales)}</span>
+            )}
           </div>
         </div>
 
