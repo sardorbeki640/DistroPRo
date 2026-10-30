@@ -195,10 +195,10 @@ class DatabaseManager {
     let restoredRows = 0;
     const client = createClient({ url, ...(authToken ? { authToken } : {}) });
     await client.execute('CREATE TABLE IF NOT EXISTS distropro_rows (tbl TEXT NOT NULL, k TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tbl, k))');
-    // Render's live database is over 130k rows and sequential 5k-page fetches
-    // spent ~75s waiting on remote round trips. 10k halves those round trips
-    // while keeping each response bounded for the 512 MB instance.
-    const pageSize = 10_000;
+    // Keep each remote response bounded. A 10k-row response reached ~10 MB on
+    // Render and the Turso socket closed while reading it; 5k pages avoid that
+    // payload size, while time-based event-loop yields keep health checks live.
+    const pageSize = 5_000;
     // Page on the composite primary key. Ordering/cursoring by seq had no matching
     // index and forced Turso to rescan and resort the entire cloud table per page.
     const firstPage = await client.execute({

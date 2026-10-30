@@ -26,7 +26,7 @@ test('cold start hydrates cloud rows directly and replays durable local outbox w
   try { await db.connectTurso(); } finally { clearInterval(heartbeat); }
   assert.ok(healthHeartbeat > 0, 'large snapshot hydration yields to health-check timers');
   assert.equal(db.findById('companies', 'cloud-company')?.name, 'Cloud row');
-  assert.equal(db.getTable('companies').length, 10_051, 'cloud snapshot spans a full page and a second page');
+  assert.equal(db.getTable('companies').length, 10_051, 'cloud snapshot spans several bounded pages');
 
   // Simulate a process stopping after writing to the durable outbox but before remote ACK.
   db.insert('companies', { id: 'pending-company', name: 'Pending outbox row' } as any);
