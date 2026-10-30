@@ -6,11 +6,10 @@ export function inventoryObservation(product: Pick<Product, 'stock_quantity' | '
     return { last_in_stock_at: observedOn, zero_stock_observed_at: null, stock_observed_at: observedOn };
   }
 
-  // If this is the first empty snapshot, the exact depletion date is unknown. Record the first verified zero day;
-  // if it was already empty before this version, begin the verifiable period now instead of backdating it.
-  const hasPriorStockEvidence = Number(product.stock_quantity || 0) > 0 || !!product.last_in_stock_at || !!product.last_sale_date;
+  // We cannot infer the physical depletion date from a sale or the previous positive snapshot. We can, however,
+  // record when this app first verified zero stock. This provides a reliable lower bound for its duration.
   return {
     stock_observed_at: observedOn,
-    zero_stock_observed_at: product.zero_stock_observed_at || (hasPriorStockEvidence ? observedOn : null)
+    zero_stock_observed_at: product.zero_stock_observed_at || observedOn
   };
 }

@@ -257,9 +257,10 @@ export class ForecastService {
   /**
    * Evaluates Stock-Out items, days missing, lost sales, and lost net profit
    */
-  /** First verified zero-stock snapshot. Last-sale dates do not prove when stock ran out. */
-  public static outOfStockSince(p: Pick<Product, 'zero_stock_observed_at'>): string | null {
-    return isValidIsoDate(p.zero_stock_observed_at) && p.zero_stock_observed_at <= businessToday() ? p.zero_stock_observed_at : null;
+  /** First verified zero-stock snapshot. Legacy rows fall back to their latest known inventory snapshot. */
+  public static outOfStockSince(p: Pick<Product, 'zero_stock_observed_at' | 'stock_observed_at'>): string | null {
+    const since = p.zero_stock_observed_at || p.stock_observed_at;
+    return isValidIsoDate(since) && since <= businessToday() ? since : null;
   }
 
   public static getOutOfStockLostProfit(companyId: string) {
@@ -302,7 +303,9 @@ export class ForecastService {
     for (const p of outItems) {
       const since = this.outOfStockSince(p);
       const stockObservedAt = isValidIsoDate(p.stock_observed_at) && p.stock_observed_at <= today ? p.stock_observed_at : null;
-      const daysOut = since && stockObservedAt && stockObservedAt >= since ? Math.max(0, daysBetween(since, stockObservedAt)) : null;
+      // Count calendar days elapsed since the first zero observation through today. The separately shown
+      // stock_observed_at date tells the user how fresh the underlying inventory snapshot is.
+      const daysOut = since && stockObservedAt && stockObservedAt >= since ? Math.max(0, daysBetween(since, today)) : null;
       if (since === null || !stockObservedAt) sinceUnknownCount++;
       const lostFromCandidate = since ? addDays(since, 1) : null;
       const coverageStart = w.coveredFrom > w.start ? w.coveredFrom : w.start;

@@ -726,7 +726,7 @@ export interface Product {
   out_of_stock_days?: number;   // legacy, not used: see ForecastService.outOfStockSince
   out_of_stock_date?: string;   // legacy, not used
   last_in_stock_at?: string | null; // last business date an import saw stock > 0
-  zero_stock_observed_at?: string | null; // first date an inventory sync confirmed zero after stock was previously positive
+  zero_stock_observed_at?: string | null; // first date an inventory sync confirmed zero (exact physical depletion can be earlier)
   stock_observed_at?: string | null; // last date this stock quantity was confirmed by inventory sync/user entry
   min_stock_level?: number;
   source?: 'SALESDOC' | 'SMARTUP' | 'LINKO' | '1C' | 'MANUAL';

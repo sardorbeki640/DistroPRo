@@ -55,3 +55,11 @@ test('a connected integration with no loaded history has no forecast coverage',(
  assert.equal(result.items[0].effective_daily_sales,0);
  assert.match(result.history.warning,/tarixi yuklanmagan/i);
 });
+
+test('legacy zero-stock products use their last confirmed inventory snapshot and count elapsed days through today',()=>{
+ db.insert('integrations',{id:'i',company_id:'c',provider_name:'SALESDOC',status:'CONNECTED',config:{forecast_days:30,history:{from:addDays(today,-100)}}} as any);
+ product('legacy-zero',{stock_observed_at:addDays(today,-1),zero_stock_observed_at:null,last_in_stock_at:null,last_sale_date:null});
+ const result=ForecastService.getOutOfStockLostProfit('c');
+ assert.equal(result.items[0].out_of_stock_since,addDays(today,-1));
+ assert.equal(result.items[0].days_out_of_stock,1);
+});

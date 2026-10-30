@@ -486,11 +486,11 @@ export interface OutOfStockLostProfitItem {
   source: string;
 }
 
-/** "12 kundan beri" / "Bugun tugagan" / "Sanasi noma'lum" for a stock-out row. */
+/** Elapsed calendar days since the first confirmed zero-stock snapshot. */
 export function stockOutLabel(item: { days_out_of_stock: number | null }): string {
   if (item.days_out_of_stock === null || item.days_out_of_stock === undefined) return '0 qoldiq sanasi aniqlanmagan';
-  if (item.days_out_of_stock === 0) return 'Bugun 0 qoldiq tasdiqlangan';
-  return `0 qoldiq ${item.days_out_of_stock} kun oldin tasdiqlangan`;
+  if (item.days_out_of_stock === 0) return '0 qoldiq bugun qayd etildi';
+  return `0 qoldiq ${item.days_out_of_stock} kundan beri qayd etilgan`;
 }
 
 export interface StockRunRateResponse {
