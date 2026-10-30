@@ -41,3 +41,16 @@ test('cold start hydrates cloud rows directly and replays durable local outbox w
   assert.equal(db.getTable('companies').length, 10_052, 'all cloud rows survive cold start and local outbox replay');
   assert.equal(Number((db as any).sql.prepare('SELECT COUNT(*) AS n FROM turso_outbox').get().n), 0);
 });
+
+test('Turso snapshot reads retry transient socket failures with bounded backoff', async () => {
+  let attempts = 0;
+  const result = await (db as any).executeTursoWithRetry({
+    execute: async () => {
+      attempts++;
+      if (attempts < 3) throw Object.assign(new Error('fetch failed'), { code: 'UND_ERR_SOCKET' });
+      return { rows: [{ ok: 1 }] };
+    }
+  }, 'SELECT 1');
+  assert.equal(attempts, 3);
+  assert.equal(result.rows[0].ok, 1);
+});

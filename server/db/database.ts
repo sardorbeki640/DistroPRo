@@ -181,6 +181,22 @@ class DatabaseManager {
     this.nextSeq = maxSeq + 1;
   }
 
+  /** Retry safe Turso DDL/read requests after transient socket or fetch failures. */
+  private async executeTursoWithRetry(client: Client, statement: any): Promise<any> {
+    const retryable = /UND_ERR_SOCKET|UND_ERR_CONNECT_TIMEOUT|fetch failed|ECONNRESET|ETIMEDOUT|EPIPE|ECONNREFUSED/i;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await client.execute(statement);
+      } catch (error) {
+        const message = String((error as any)?.message || error);
+        if (attempt >= 3 || !retryable.test(`${message} ${(error as any)?.code || ''}`)) throw error;
+        const delayMs = 1_000 * (2 ** attempt);
+        console.warn(`[Turso] O‘qish/ulanish vaqtincha uzildi; ${attempt + 1}-qayta urinish ${delayMs} ms dan so‘ng: ${message}`);
+        await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
   /** Connect the local SQLite cache to a Turso database and restore the cloud copy before migrations run. */
   public async connectTurso(): Promise<void> {
     if (this.turso) return;
@@ -194,14 +210,13 @@ class DatabaseManager {
     const startedAt = Date.now();
     let restoredRows = 0;
     const client = createClient({ url, ...(authToken ? { authToken } : {}) });
-    await client.execute('CREATE TABLE IF NOT EXISTS distropro_rows (tbl TEXT NOT NULL, k TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tbl, k))');
-    // Keep each remote response bounded. A 10k-row response reached ~10 MB on
-    // Render and the Turso socket closed while reading it; 5k pages avoid that
-    // payload size, while time-based event-loop yields keep health checks live.
-    const pageSize = 5_000;
+    await this.executeTursoWithRetry(client, 'CREATE TABLE IF NOT EXISTS distropro_rows (tbl TEXT NOT NULL, k TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tbl, k))');
+    // Render logs showed socket closures after 10-13 MB responses, including at
+    // 5k rows. Use smaller bounded pages and retry transient read/socket failures.
+    const pageSize = 1_500;
     // Page on the composite primary key. Ordering/cursoring by seq had no matching
     // index and forced Turso to rescan and resort the entire cloud table per page.
-    const firstPage = await client.execute({
+    const firstPage = await this.executeTursoWithRetry(client, {
       sql: 'SELECT tbl, k, seq, data FROM distropro_rows ORDER BY tbl, k LIMIT ?',
       args: [pageSize]
     });
@@ -241,7 +256,7 @@ class DatabaseManager {
             }
           }
           if (page.rows.length < pageSize) break;
-          page = await client.execute({
+          page = await this.executeTursoWithRetry(client, {
             // A row-value cursor matches the composite (tbl, k) primary key and
             // avoids scanning the table again for every hydration page.
             sql: 'SELECT tbl, k, seq, data FROM distropro_rows WHERE (tbl, k) > (?, ?) ORDER BY tbl, k LIMIT ?',
