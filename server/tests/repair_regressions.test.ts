@@ -32,10 +32,20 @@ test('all registers contribute, bank is unknown and historical snapshot fails ex
  const date=businessToday();
  for(const [register,amount] of [['a',100],['b',200]] as const) db.insert('cash_days',{id:register,register_id:register,company_id:'c',date,status:'CLOSED',actual_closing_balance:amount,terminal_payment:1000000} as any);
  const report=AnalyticsService.getBalanceSheet('c',date);
+ assert.equal(report.complete,false);
  assert.equal(report.assets.cash_in_registers,300);
  assert.equal(report.assets.bank_balances,null);
  assert.equal(report.net_equity,null);
  assert.throws(()=>AnalyticsService.getBalanceSheet('c','2020-01-01'),/Tarixiy/);
+});
+test('default balance snapshot excludes future-dated cash and expenses',()=>{
+ const today=businessToday();
+ db.insert('cash_days',{id:'future-day',register_id:'main',company_id:'c',date:'9999-12-31',status:'CLOSED',actual_closing_balance:900,cash_inflow:900,cash_outflow:400} as any);
+ db.insert('expenses',{id:'future-expense',company_id:'c',date:'9999-12-31',status:'CONFIRMED',amount:700} as any);
+ const report=AnalyticsService.getBalanceSheet('c');
+ assert.equal(report.as_of_date,today);
+ assert.equal(report.cashflow.total_inflow,0);
+ assert.equal(report.cashflow.total_outflow,0);
 });
 test('unconfigured SMS never reports delivery',()=>{
  // The stock alert goes to Telegram bots; with none subscribed it must not claim delivery.

@@ -163,7 +163,7 @@ class DatabaseManager {
     this.index.clear();
     this.meta = new WeakMap<object, RowMeta>();
     let maxSeq = 0;
-    let processed = 0;
+    let lastYieldAt = Date.now();
     for (const r of this.sql.prepare('SELECT tbl, k, seq, data FROM rows ORDER BY tbl, seq').iterate()) {
       const row = this.deserialize(r.tbl, JSON.parse(r.data));
       const table = ((this.data as any)[r.tbl] ||= []) as any[];
@@ -171,9 +171,12 @@ class DatabaseManager {
       this.meta.set(row, { key: r.k, seq: Number(r.seq) });
       this.indexOf(r.tbl).set(r.k, row);
       if (Number(r.seq) > maxSeq) maxSeq = Number(r.seq);
-      // Keep Render's 5-second health check responsive even while restoring a
-      // large Turso snapshot on a single-core free instance.
-      if (++processed % 500 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      // Yield by elapsed time rather than row count: production rows vary greatly
+      // in size, so a fixed 500-row batch can still block Render's 5-second health check.
+      if (Date.now() - lastYieldAt >= 25) {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        lastYieldAt = Date.now();
+      }
     }
     this.nextSeq = maxSeq + 1;
   }
@@ -192,7 +195,10 @@ class DatabaseManager {
     let restoredRows = 0;
     const client = createClient({ url, ...(authToken ? { authToken } : {}) });
     await client.execute('CREATE TABLE IF NOT EXISTS distropro_rows (tbl TEXT NOT NULL, k TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tbl, k))');
-    const pageSize = 5000;
+    // Render's live database is over 130k rows and sequential 5k-page fetches
+    // spent ~75s waiting on remote round trips. 10k halves those round trips
+    // while keeping each response bounded for the 512 MB instance.
+    const pageSize = 10_000;
     // Page on the composite primary key. Ordering/cursoring by seq had no matching
     // index and forced Turso to rescan and resort the entire cloud table per page.
     const firstPage = await client.execute({
@@ -219,6 +225,7 @@ class DatabaseManager {
         let page = firstPage;
         let lastTable = '';
         let lastKey = '';
+        let lastYieldAt = Date.now();
         while (page.rows.length) {
           for (const row of page.rows as any[]) {
             const tableName = String(row.tbl), key = String(row.k), seq = Number(row.seq), data = String(row.data);
@@ -226,7 +233,12 @@ class DatabaseManager {
             this.hydrateMemoryRow(tableName, key, seq, data);
             lastTable = tableName;
             lastKey = key;
-            if (++restoredRows % 500 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+            // A row-count batch is not a reliable time bound because row JSON
+            // size is uneven. Keep health checks responsive under large snapshots.
+            if (Date.now() - lastYieldAt >= 25) {
+              await new Promise<void>(resolve => setImmediate(resolve));
+              lastYieldAt = Date.now();
+            }
           }
           if (page.rows.length < pageSize) break;
           page = await client.execute({
@@ -266,7 +278,7 @@ class DatabaseManager {
 
   /** Replay the durable outbox over a cloud snapshot in memory, in the same order as its SQLite replay. */
   private async applyOutboxToMemory(ops: TursoOutboxOp[]): Promise<void> {
-    let processed = 0;
+    let lastYieldAt = Date.now();
     for (const op of ops) {
       const table = ((this.data as any)[op.tbl] ||= []) as any[];
       const index = this.indexOf(op.tbl);
@@ -293,7 +305,10 @@ class DatabaseManager {
         index.set(op.k, row);
         this.nextSeq = Math.max(this.nextSeq, Number(op.seq) + 1);
       }
-      if (++processed % 500 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      if (Date.now() - lastYieldAt >= 25) {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        lastYieldAt = Date.now();
+      }
     }
   }
 

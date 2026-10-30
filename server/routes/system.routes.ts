@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { db } from '../db/database.ts';
 import { requireAuth, requireOwner } from '../middleware/auth.middleware.ts';
-import { listBackups, runBackup } from '../services/backup.service.ts';
+import { backupStatus, listBackups, resolveBackup, runBackup } from '../services/backup.service.ts';
 import { AuditService } from '../services/audit.service.ts';
 import { BotService, BOT_EVENTS } from '../services/bot.service.ts';
 import { TelegramService } from '../services/telegram.service.ts';
@@ -14,14 +14,23 @@ router.use(requireAuth, requireOwner);
 /** GET /api/system/backups — automatic backups and where they are. */
 router.get('/backups', (_req, res, next) => {
   try {
-    res.json({ success: true, backups: listBackups(), extra_copy_dir: process.env.BACKUP_COPY_DIR || null });
+    res.json({ success: true, backups: listBackups(), ...backupStatus() });
+  } catch (e) { next(e); }
+});
+
+/** GET /api/system/backups/:kind/:name — download a listed backup (owner only). */
+router.get('/backups/:kind/:name', (req, res, next) => {
+  try {
+    const file = resolveBackup(req.params.kind, req.params.name);
+    if (!file) return res.status(404).json({ success: false, error: 'Zaxira nusxa topilmadi.' });
+    res.download(file, req.params.name, error => { if (error && !res.headersSent) next(error); });
   } catch (e) { next(e); }
 });
 
 /** POST /api/system/backups — make a backup now. */
-router.post('/backups', (req, res, next) => {
+router.post('/backups', async (req, res, next) => {
   try {
-    const r = runBackup();
+    const r = await runBackup();
     AuditService.log({ company_id: req.user!.companyId, user_id: req.user!.userId, user_email: req.user!.email, action: 'CREATE', entity: 'Backup', entity_id: r.file, old_value: null, new_value: r, reason: 'Qo‘lda zaxira nusxa olindi' });
     res.json({ success: true, ...r, backups: listBackups() });
   } catch (e) { next(e); }

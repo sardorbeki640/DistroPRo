@@ -316,7 +316,8 @@ export class SalesDocAdapter implements IntegrationAdapter {
         }
       }
     }
-    return [error.message, ...details].filter(Boolean).join(': ') + (error.code ? ` (kod ${error.code})` : '');
+    const summary = [error.message, ...details].filter(Boolean).join(': ') || 'SalesDoctor aniq xato matnini qaytarmadi';
+    return summary + (error.code ? ` (kod ${error.code})` : '');
   }
 
   private isAuthError(error?: { code: number; message: string }): boolean {

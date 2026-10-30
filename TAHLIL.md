@@ -1,5 +1,7 @@
 # Distro Pro — tekshiruv natijasi
 
+> Tarixiy audit: 2026-09-27 da boshqa, arxivdan olingan nusxa asosida tuzilgan. Undagi ayrim muammolar joriy kodda tuzatilgan; bugungi holat uchun [`AUDIT-2026-10-30.md`](AUDIT-2026-10-30.md) ga qarang.
+
 Sana: 2026-09-27. Manba: dstro-pro-moliya-tizimi.zip. Mahalliy nusxa http://127.0.0.1:3100 da ishga tushirildi. Bu dastur hozir haqiqiy moliyani ishonchli boshqarishga tayyor emas. Quyida kuzatilgan yoki kod/sun'iy ma'lumot bilan tasdiqlangan muammolar berilgan.
 
 ## Birinchi navbatdagi xatolar

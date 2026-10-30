@@ -422,7 +422,10 @@ export class AnalyticsService {
     const workingCapital = null, currentRatio = null, debtToEquityRatio = null, cashRatio = null;
     // 7. Cashflow (Kirim, Chiqim va Naqd Qoldiq)
     const allCashDays = db.find('cash_days', d => d.company_id === company_id);
-    const targetDays = asOfDate ? allCashDays.filter(d => d.date <= today) : allCashDays;
+    // The report is always an as-of snapshot (today when no date is supplied).
+    // Including future-dated cash days in the default path leaks planned/future
+    // entries into a report labelled with today's date.
+    const targetDays = allCashDays.filter(d => d.date <= today);
 
     let totalInflow = 0;
     let totalOutflow = 0;
@@ -452,7 +455,7 @@ export class AnalyticsService {
       returnsSum += (d.return_amount || 0);
     }
 
-    const expensesList = db.find('expenses', e => e.company_id === company_id && e.status === 'CONFIRMED' && (!asOfDate || e.date <= today));
+    const expensesList = db.find('expenses', e => e.company_id === company_id && e.status === 'CONFIRMED' && e.date <= today);
     const paidExpensesTotal = expensesList.reduce((sum, e) => sum + (e.amount || 0), 0);
     if (operatingExpenses === 0 && paidExpensesTotal > 0) {
       operatingExpenses = paidExpensesTotal;

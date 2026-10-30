@@ -171,13 +171,15 @@ export interface Product {
 export interface BalanceSheetReport {
   company_id: string;
   as_of_date: string;
+  complete: boolean;
+  warnings: string[];
   cashflow?: {
     total_inflow: number;
     total_outflow: number;
     net_flow: number;
     cash_balance: number;
-    bank_balance: number;
-    total_liquid: number;
+    bank_balance: number | null;
+    total_liquid: number | null;
     breakdown?: {
       sales_cash: number;
       credit_collected: number;
@@ -189,23 +191,23 @@ export interface BalanceSheetReport {
   };
   assets: {
     cash_in_registers: number;
-    bank_balances: number;
+    bank_balances: number | null;
     accounts_receivable: number;
     inventory_value: number;
-    total_assets: number;
+    total_assets: number | null;
   };
   liabilities: {
-    accounts_payable: number;
+    accounts_payable: number | null;
     payroll_liabilities: number;
     customer_prepayments: number;
-    total_liabilities: number;
+    total_liabilities: number | null;
   };
-  net_equity: number;
+  net_equity: number | null;
   indicators: {
-    working_capital: number;
-    current_ratio: number;
-    debt_to_equity_ratio: number;
-    cash_ratio: number;
+    working_capital: number | null;
+    current_ratio: number | null;
+    debt_to_equity_ratio: number | null;
+    cash_ratio: number | null;
   };
 }
 
@@ -565,4 +567,3 @@ export interface AIAgentChatMessage {
   };
   actionResult?: any;
 }
-

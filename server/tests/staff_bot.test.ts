@@ -168,3 +168,25 @@ test('failed Telegram polling backs off and resumes cleanly after the network re
  assert.equal(recovered.config.poll_retry_after,null);
  assert.equal(recovered.config.poll_error,null);
 });
+
+test('failed update handling keeps the Telegram offset so attendance and commands are retried',async()=>{
+ const tg=fakeTelegram();company();
+ const bot=await personalBot();
+ tg.write(555,'/start invalid-code');
+ const original=(StaffBotService as any).handleCommand;
+ (StaffBotService as any).handleCommand=async()=>{throw new Error('temporary database write error');};
+ try { await StaffBotService.pollUpdates(db.findById('notification_channels',bot.id)!); }
+ finally { (StaffBotService as any).handleCommand=original; }
+
+ const failed=db.findById('notification_channels',bot.id)!;
+ assert.equal(failed.config.update_offset || 0,0,'the failed update must not be acknowledged');
+ assert.match(failed.config.poll_error,/temporary database write error/);
+ assert.ok(Date.parse(failed.config.poll_retry_after)>Date.now());
+
+ db.update('notification_channels',bot.id,{config:{...failed.config,poll_retry_after:'2000-01-01T00:00:00.000Z'}} as any);
+ await StaffBotService.pollUpdates(db.findById('notification_channels',bot.id)!);
+ const recovered=db.findById('notification_channels',bot.id)!;
+ assert.equal(recovered.config.update_offset,101,'the update is acknowledged after it is handled successfully');
+ assert.equal(recovered.config.poll_error,null);
+ assert.equal(recovered.config.poll_failures,0);
+});

@@ -69,7 +69,7 @@ function waitForDatabaseReady(): Promise<void> {
   return databaseReadyWait;
 }
 
-async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+async function fetchApi<T>(endpoint: string, options: RequestInit = {}, retriedAfterStartupWait = false): Promise<T> {
   const token = getStoredToken();
   const headers = new Headers(options.headers || {});
 
@@ -88,6 +88,18 @@ async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise
     throw new Error('Server bilan aloqa yo‘q (server qayta ishga tushayotgan bo‘lishi mumkin). Bir necha soniyadan keyin qayta urinib ko‘ring.');
   }
 
+  // Render's free web service can return an HTML/empty 503 while waking, before the
+  // Node app can return its JSON startup message. Wait for /api/health and retry once.
+  // The forecast sync is an upsert/background-refresh operation, so repeating it after
+  // a proxy-level (non-JSON) failure is safe; other writes are never replayed here.
+  const contentType = response.headers.get('content-type') || '';
+  const method = String(options.method || 'GET').toUpperCase();
+  const wakeRetryAllowed = ['GET', 'HEAD', 'OPTIONS'].includes(method) || (method === 'POST' && endpoint === '/api/forecast/sync');
+  if (!retriedAfterStartupWait && wakeRetryAllowed && [502, 503, 504].includes(response.status) && !contentType.toLowerCase().includes('json')) {
+    await waitForDatabaseReady();
+    return fetchApi<T>(endpoint, options, true);
+  }
+
   let data: any;
   try {
     data = await response.json();
@@ -104,9 +116,9 @@ async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise
 
   if (!response.ok || data.success === false) {
     const errorMsg = data.error || data.message || `Server xatoligi: ${response.status}`;
-    if (response.status === 503 && String(errorMsg).includes('Tizim bazadagi ma’lumotlarni yuklamoqda')) {
+    if (!retriedAfterStartupWait && response.status === 503 && String(errorMsg).includes('Tizim bazadagi ma’lumotlarni yuklamoqda')) {
       await waitForDatabaseReady();
-      return fetchApi<T>(endpoint, options);
+      return fetchApi<T>(endpoint, options, true);
     }
     // The status lets a screen tell "no permission" (403) from a real failure.
     throw Object.assign(new Error(errorMsg), { status: response.status });
@@ -236,8 +248,9 @@ export const api = {
     fetchApi(`/api/staff/${employeeId}/profile`, { method: 'PUT', body: JSON.stringify(body) }),
   getCompany: (): Promise<{ company: { name: string; tax_id: string; address: string; phone: string } }> => fetchApi('/api/system/company'),
   saveCompany: (body: { name: string; tax_id: string; address: string; phone: string }): Promise<any> => fetchApi('/api/system/company', { method: 'PUT', body: JSON.stringify(body) }),
-  getBackups: (): Promise<{ backups: { name: string; kind: string; size_mb: number; created_at: string }[]; extra_copy_dir: string | null }> => fetchApi('/api/system/backups'),
-  runBackup: (): Promise<{ file: string; copied_to: string | null; backups: { name: string; kind: string; size_mb: number; created_at: string }[] }> => fetchApi('/api/system/backups', { method: 'POST' }),
+  getBackups: (): Promise<{ backups: { name: string; kind: 'daily' | 'weekly'; size_mb: number; created_at: string }[]; storage: 'turso' | 'sqlite'; scheduled: boolean; storage_notice: string; extra_copy_dir: string | null }> => fetchApi('/api/system/backups'),
+  runBackup: (): Promise<{ file: string; copied_to: string | null; backups: { name: string; kind: 'daily' | 'weekly'; size_mb: number; created_at: string }[] }> => fetchApi('/api/system/backups', { method: 'POST' }),
+  downloadBackup: (kind: 'daily' | 'weekly', name: string): Promise<void> => downloadWithAuth(`/api/system/backups/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, name),
 
   // Staff accounts and personal cabinet
   getMyCabinet: (month?: string): Promise<any> => fetchApi('/api/staff/me/cabinet' + (month ? '?month=' + month : '')),

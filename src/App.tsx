@@ -7,6 +7,7 @@ import { canOpen, homeView } from './utils/permissions.ts';
 import { api, getStoredToken, removeStoredToken } from './services/api.ts';
 import { AuthUser, CashDay, CashTransaction, NavView } from './types.ts';
 import { Sparkles } from 'lucide-react';
+import { ChangePasswordModal } from './components/common/ChangePasswordModal.tsx';
 
 // Keep the first download small: operational pages are loaded only when opened.
 const DashboardView = React.lazy(() => import('./components/views/DashboardView.tsx').then(m => ({ default: m.DashboardView })));
@@ -29,7 +30,6 @@ const AttendanceView = React.lazy(() => import('./components/views/AttendanceVie
 const ApkInstallModal = React.lazy(() => import('./components/common/ApkInstallModal.tsx').then(m => ({ default: m.ApkInstallModal })));
 const QuickToolsModal = React.lazy(() => import('./components/common/QuickToolsModal.tsx').then(m => ({ default: m.QuickToolsModal })));
 const AIAgentDrawer = React.lazy(() => import('./components/common/AIAgentDrawer.tsx').then(m => ({ default: m.AIAgentDrawer })));
-const ChangePasswordModal = React.lazy(() => import('./components/common/ChangePasswordModal.tsx').then(m => ({ default: m.ChangePasswordModal })));
 
 function ViewLoading() {
   return <div className="flex min-h-40 items-center justify-center text-sm text-neutral-500">Bo‘lim yuklanmoqda…</div>;

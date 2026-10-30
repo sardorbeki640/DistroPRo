@@ -12,6 +12,7 @@ before(() => {
   delete process.env.TURSO_AUTH_TOKEN;
   db.init();
   db.insert('companies', { id: 'cloud-company', name: 'Cloud row' } as any);
+  db.upsertMany('companies', Array.from({ length: 10_050 }, (_, i) => ({ id: `cloud-company-${i}`, name: `Cloud row ${i}` })) as any);
 });
 after(() => {
   try { db.close(); } catch { /* test cleanup */ }
@@ -20,8 +21,12 @@ after(() => {
 });
 
 test('cold start hydrates cloud rows directly and replays durable local outbox writes', async () => {
-  await db.connectTurso();
+  let healthHeartbeat = 0;
+  const heartbeat = setInterval(() => healthHeartbeat++, 5);
+  try { await db.connectTurso(); } finally { clearInterval(heartbeat); }
+  assert.ok(healthHeartbeat > 0, 'large snapshot hydration yields to health-check timers');
   assert.equal(db.findById('companies', 'cloud-company')?.name, 'Cloud row');
+  assert.equal(db.getTable('companies').length, 10_051, 'cloud snapshot spans a full page and a second page');
 
   // Simulate a process stopping after writing to the durable outbox but before remote ACK.
   db.insert('companies', { id: 'pending-company', name: 'Pending outbox row' } as any);
@@ -33,5 +38,6 @@ test('cold start hydrates cloud rows directly and replays durable local outbox w
   await db.connectTurso();
   assert.equal(db.findById('companies', 'cloud-company')?.name, 'Cloud row');
   assert.equal(db.findById('companies', 'pending-company')?.name, 'Pending outbox row');
+  assert.equal(db.getTable('companies').length, 10_052, 'all cloud rows survive cold start and local outbox replay');
   assert.equal(Number((db as any).sql.prepare('SELECT COUNT(*) AS n FROM turso_outbox').get().n), 0);
 });

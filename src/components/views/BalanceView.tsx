@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { localToday } from '../../utils/date';
 import { 
   Scale, 
@@ -32,17 +32,20 @@ export const BalanceView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [balanceData, setBalanceData] = useState<BalanceSheetReport | null>(null);
   const [showCashflowDetails, setShowCashflowDetails] = useState<boolean>(false);
+  const latestRequest = useRef(0);
 
   const fetchBalanceSheet = async (dateStr?: string) => {
+    const requestId = ++latestRequest.current;
     setLoading(true);
     setError(null);
+    setBalanceData(null);
     try {
       const res = await api.getBalanceSheet(dateStr || asOfDate);
-      setBalanceData(res.balance);
+      if (requestId === latestRequest.current) setBalanceData(res.balance);
     } catch (err: any) {
-      setError(err.message || 'Balans hisobotini yuklashda xatolik yuz berdi');
+      if (requestId === latestRequest.current) setError(err.message || 'Balans hisobotini yuklashda xatolik yuz berdi');
     } finally {
-      setLoading(false);
+      if (requestId === latestRequest.current) setLoading(false);
     }
   };
 
@@ -88,9 +91,12 @@ export const BalanceView: React.FC = () => {
     });
   };
 
-  const isBalanced = balanceData && balanceData.assets.total_assets != null 
-    ? Math.abs(balanceData.assets.total_assets - (balanceData.liabilities.total_liabilities + balanceData.net_equity)) < 100
-    : true;
+  const totalAssets = balanceData?.assets.total_assets;
+  const totalLiabilities = balanceData?.liabilities.total_liabilities;
+  const netEquity = balanceData?.net_equity;
+  const isBalanced = balanceData?.complete === true
+    && totalAssets != null && totalLiabilities != null && netEquity != null
+    && Math.abs(totalAssets - (totalLiabilities + netEquity)) < 100;
 
   return (
     <div className="space-y-6 pb-12">
@@ -175,7 +181,7 @@ export const BalanceView: React.FC = () => {
                     : 'To‘liq balans uchun ma’lumot yetishmaydi'}
                 </h3>
                 <p className="text-xs opacity-90 mt-0.5">
-                  Jami Aktivlar: <strong>{(balanceData.assets.total_assets == null ? 'Ma’lumot yo‘q' : balanceData.assets.total_assets.toLocaleString())} UZS</strong> | Majburiyatlar + Kapital: <strong>{(balanceData.net_equity == null ? 'Ma’lumot yo‘q' : (balanceData.liabilities.total_liabilities + balanceData.net_equity).toLocaleString())} UZS</strong>
+                  Jami Aktivlar: <strong>{(balanceData.assets.total_assets == null ? 'Ma’lumot yo‘q' : balanceData.assets.total_assets.toLocaleString())} UZS</strong> | Majburiyatlar + Kapital: <strong>{(balanceData.liabilities.total_liabilities == null || balanceData.net_equity == null ? 'Ma’lumot yo‘q' : (balanceData.liabilities.total_liabilities + balanceData.net_equity).toLocaleString())} UZS</strong>
                 </p>
               </div>
             </div>

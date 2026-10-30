@@ -288,57 +288,71 @@ export class StaffBotService {
     const recent: { id: string; title: string; type: string }[] = Array.isArray(bot.config.recent_chats) ? bot.config.recent_chats : [];
     let last = offset;
     let lastUpdate: any = bot.config.last_update || null;
+    let processingError: string | null = null;
+    let processingFailures = 0;
     for (const u of updates) {
+      const lastSuccessful = last;
       last = Math.max(last, Number(u.update_id) || 0);
-      const chat = u.message?.chat || u.my_chat_member?.chat || u.channel_post?.chat;
-      if (u.message || u.channel_post) {
-        const m = u.message || u.channel_post;
-        const settings = AttendanceService.settings(bot.company_id);
-        const chatId = String(chat?.id ?? '');
-        const groupMatch = Object.entries(settings.checkin_groups || {}).find(([, id]) => String(id) === chatId);
-        const employeeMatch = Object.entries(settings.checkin_employee_groups || {}).find(([, id]) => String(id) === chatId);
-        const legacyMatch = !!bot.config.checkin_chat_id && chatId === String(bot.config.checkin_chat_id);
-        const video = !!(m.video_note || m.video || m.animation || m.document);
-        lastUpdate = {
-          at: new Date(Number(m.date || Date.now() / 1000) * 1000).toISOString(),
-          chat: chat?.title || chat?.username || String(chat?.id || 'Noma’lum chat'),
-          sender: [m.from?.first_name, m.from?.last_name].filter(Boolean).join(' ') || m.from?.username || 'Noma’lum yuboruvchi',
-          kind: m.video_note ? 'Dumaloq video' : m.video ? 'Oddiy video' : m.text ? 'Matn' : video ? 'Fayl' : 'Boshqa xabar',
-          checkin_group: !!(groupMatch || employeeMatch || legacyMatch),
-          checkin_result: video ? (groupMatch || employeeMatch || legacyMatch ? 'Davomat guruhi topildi' : 'Guruh ID mos kelmadi') : null
-        };
-      }
-      if (chat) {
-        const title = chat.title || [chat.first_name, chat.last_name].filter(Boolean).join(' ') || chat.username || String(chat.id);
-        const i = recent.findIndex(c => c.id === String(chat.id));
-        if (i >= 0) recent.splice(i, 1);
-        recent.unshift({ id: String(chat.id), title, type: chat.type });
-      }
-      // Shared work-group check-ins, each agent's own group, and the older bot-form check-in group.
-      if (u.message?.video_note || u.message?.video) {
-        const settings = AttendanceService.settings(bot.company_id);
-        const chatId = String(chat?.id ?? '');
-        const groupMatch = Object.entries(settings.checkin_groups || {}).find(([, id]) => String(id) === chatId);
-        const employeeMatch = Object.entries(settings.checkin_employee_groups || {}).find(([, id]) => String(id) === chatId);
-        const legacyMatch = !!bot.config.checkin_chat_id && chatId === String(bot.config.checkin_chat_id);
-        if (groupMatch || employeeMatch || legacyMatch) {
-          try { await this.handleVideo(bot, u.message, groupMatch?.[0], employeeMatch?.[0]); } catch (err: any) { console.warn('[StaffBot] video:', err.message); }
-        }
-        continue;
-      }
-      if (process.env.TELEGRAM_POLLING_ONLY === '1') continue;
-      const text = String(u.message?.text || '').trim();
-      if (!bot.config.personal || !u.message || chat?.type !== 'private' || !text.startsWith('/')) continue;
-      const chatId = String(chat.id);
-      const name = [chat.first_name, chat.last_name].filter(Boolean).join(' ') + (chat.username ? ` (@${chat.username})` : '');
       try {
+        const chat = u.message?.chat || u.my_chat_member?.chat || u.channel_post?.chat;
+        if (u.message || u.channel_post) {
+          const m = u.message || u.channel_post;
+          const settings = AttendanceService.settings(bot.company_id);
+          const chatId = String(chat?.id ?? '');
+          const groupMatch = Object.entries(settings.checkin_groups || {}).find(([, id]) => String(id) === chatId);
+          const employeeMatch = Object.entries(settings.checkin_employee_groups || {}).find(([, id]) => String(id) === chatId);
+          const legacyMatch = !!bot.config.checkin_chat_id && chatId === String(bot.config.checkin_chat_id);
+          const video = !!(m.video_note || m.video || m.animation || m.document);
+          lastUpdate = {
+            at: new Date(Number(m.date || Date.now() / 1000) * 1000).toISOString(),
+            chat: chat?.title || chat?.username || String(chat?.id || 'Noma’lum chat'),
+            sender: [m.from?.first_name, m.from?.last_name].filter(Boolean).join(' ') || m.from?.username || 'Noma’lum yuboruvchi',
+            kind: m.video_note ? 'Dumaloq video' : m.video ? 'Oddiy video' : m.text ? 'Matn' : video ? 'Fayl' : 'Boshqa xabar',
+            checkin_group: !!(groupMatch || employeeMatch || legacyMatch),
+            checkin_result: video ? (groupMatch || employeeMatch || legacyMatch ? 'Davomat guruhi topildi' : 'Guruh ID mos kelmadi') : null
+          };
+        }
+        if (chat) {
+          const title = chat.title || [chat.first_name, chat.last_name].filter(Boolean).join(' ') || chat.username || String(chat.id);
+          const i = recent.findIndex(c => c.id === String(chat.id));
+          if (i >= 0) recent.splice(i, 1);
+          recent.unshift({ id: String(chat.id), title, type: chat.type });
+        }
+        // Shared work-group check-ins, each agent's own group, and the older bot-form check-in group.
+        if (u.message?.video_note || u.message?.video) {
+          const settings = AttendanceService.settings(bot.company_id);
+          const chatId = String(chat?.id ?? '');
+          const groupMatch = Object.entries(settings.checkin_groups || {}).find(([, id]) => String(id) === chatId);
+          const employeeMatch = Object.entries(settings.checkin_employee_groups || {}).find(([, id]) => String(id) === chatId);
+          const legacyMatch = !!bot.config.checkin_chat_id && chatId === String(bot.config.checkin_chat_id);
+          if (groupMatch || employeeMatch || legacyMatch) await this.handleVideo(bot, u.message, groupMatch?.[0], employeeMatch?.[0]);
+          continue;
+        }
+        if (process.env.TELEGRAM_POLLING_ONLY === '1') continue;
+        const text = String(u.message?.text || '').trim();
+        if (!bot.config.personal || !u.message || chat?.type !== 'private' || !text.startsWith('/')) continue;
+        const chatId = String(chat.id);
+        const name = [chat.first_name, chat.last_name].filter(Boolean).join(' ') + (chat.username ? ` (@${chat.username})` : '');
         await this.handleCommand(bot, chatId, name.trim() || chatId, text);
       } catch (err: any) {
-        console.warn('[StaffBot]', err.message);
+        last = lastSuccessful;
+        processingError = err?.message || 'Telegram xabarini qayta ishlashda xatolik.';
+        const fresh = db.findById('notification_channels', bot.id);
+        processingFailures = Math.min(8, Number(fresh?.config.poll_failures || 0) + 1);
+        console.warn('[StaffBot] update:', processingError);
+        break;
       }
     }
     const fresh = db.findById('notification_channels', bot.id);
-    if (fresh) db.update('notification_channels', bot.id, { config: { ...fresh.config, update_offset: last, recent_chats: recent.slice(0, 20), last_update: lastUpdate, poll_error: null, poll_failures: 0, poll_retry_after: null, last_poll_at: new Date().toISOString() } });
+    if (fresh) {
+      const delaySeconds = processingError ? Math.min(300, 20 * (2 ** (processingFailures - 1))) : 0;
+      db.update('notification_channels', bot.id, { config: {
+        ...fresh.config, update_offset: last, recent_chats: recent.slice(0, 20), last_update: lastUpdate,
+        poll_error: processingError, poll_failures: processingError ? processingFailures : 0,
+        poll_retry_after: processingError ? new Date(Date.now() + delaySeconds * 1000).toISOString() : null,
+        last_poll_at: new Date().toISOString()
+      } });
+    }
     return updates.length;
   }
 
