@@ -80,8 +80,11 @@ async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise
 
   let response: Response;
   try {
-    response = await fetch(endpoint, { ...options, headers });
-  } catch {
+    response = await fetch(endpoint, { ...options, headers, signal: options.signal || AbortSignal.timeout(90_000) });
+  } catch (error: any) {
+    if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+      throw new Error('Server 90 soniya ichida javob bermadi. Bepul server uyg‘onayotgan bo‘lishi yoki baza sekin javob berishi mumkin; qayta urinib ko‘ring.');
+    }
     throw new Error('Server bilan aloqa yo‘q (server qayta ishga tushayotgan bo‘lishi mumkin). Bir necha soniyadan keyin qayta urinib ko‘ring.');
   }
 

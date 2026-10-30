@@ -22,10 +22,11 @@ export const errorHandler = (
     return;
   }
 
-  // Standard or custom errors
-  const status = err.status || err.statusCode || 400;
+  // Unknown exceptions are server failures, not client validation errors.
+  const requestedStatus = Number(err.status || err.statusCode);
+  const status = Number.isInteger(requestedStatus) && requestedStatus >= 400 && requestedStatus <= 599 ? requestedStatus : 500;
   res.status(status).json({
     success: false,
-    error: err.message || 'Kutilmagan server xatoligi'
+    error: status >= 500 ? 'Serverda kutilmagan xatolik yuz berdi. Birozdan keyin qayta urinib ko‘ring.' : (err.message || 'So‘rovni bajarib bo‘lmadi.')
   });
 };

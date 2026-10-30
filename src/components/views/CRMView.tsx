@@ -20,14 +20,22 @@ const RESULT_LABEL: Record<string, string> = {
 const PRIORITY_LABEL: Record<string, string> = { LOW: 'Past', NORMAL: 'O‘rta', HIGH: 'Yuqori' };
 
 /** Picks a customer the signed-in person may work with (server applies the same visibility rules). */
-const CustomerPicker: React.FC<{ value: { id: string; name: string } | null; onChange: (c: { id: string; name: string } | null) => void }> = ({ value, onChange }) => {
+const CustomerPicker: React.FC<{ value: { id: string; name: string } | null; onChange: (c: { id: string; name: string } | null) => void; onError?: (e: string) => void }> = ({ value, onChange, onError }) => {
   const [q, setQ] = useState('');
   const [list, setList] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (value) return;
-    const t = setTimeout(() => api.crm.customers(q).then(r => setList(r.customers)).catch(() => setList([])), 250);
-    return () => clearTimeout(t);
-  }, [q, value]);
+    let current = true;
+    const t = setTimeout(() => {
+      setLoading(true); setError(null);
+      api.crm.customers(q).then(r => { if (current) setList(r.customers); }).catch(e => {
+        if (current) { setList([]); setError(e.message || 'Mijozlarni yuklab bo‘lmadi.'); onError?.(e.message); }
+      }).finally(() => { if (current) setLoading(false); });
+    }, 250);
+    return () => { current = false; clearTimeout(t); };
+  }, [q, value, onError]);
   if (value) return (
     <div className="flex items-center justify-between rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs">
       <span className="font-semibold">{value.name}</span>
@@ -37,6 +45,8 @@ const CustomerPicker: React.FC<{ value: { id: string; name: string } | null; onC
   return (
     <div>
       <input className={input} placeholder="Mijoz nomi, telefoni yoki kodi" value={q} onChange={e => setQ(e.target.value)} />
+      {loading && <p className="mt-1 text-[11px] text-neutral-500">Mijozlar yuklanmoqda…</p>}
+      {error && <p className="mt-1 text-[11px] text-red-700">Mijozlar olinmadi: {error}</p>}
       {list.length > 0 && (
         <div className="mt-1 max-h-40 overflow-y-auto rounded-lg border border-neutral-200">
           {list.map(c => <button type="button" key={c.id} onClick={() => onChange({ id: c.id, name: c.name })} className="block w-full px-2.5 py-1.5 text-left text-xs hover:bg-neutral-50">{c.name} <span className="text-neutral-400">{c.phone}</span></button>)}
@@ -58,8 +68,8 @@ export const CRMView: React.FC<{ user: AuthUser | null }> = ({ user }) => {
   const canCreateDeal = can(user, 'crm:create');
 
   const flash = (text: string) => { setNotice(text); setTimeout(() => setNotice(null), 4000); };
-  const loadSummary = () => api.crm.summary().then(r => { setSummary(r.summary); setSeesAll(r.sees_all); }).catch(e => setError(e.message));
-  useEffect(() => { loadSummary(); api.crm.users().then(r => setUsers(r.users)).catch(() => {}); }, []);
+  const loadSummary = () => { setSummary(null); return api.crm.summary().then(r => { setSummary(r.summary); setSeesAll(r.sees_all); }).catch(e => setError(e.message)); };
+  useEffect(() => { loadSummary(); api.crm.users().then(r => setUsers(r.users)).catch(e => setError(e.message)); }, []);
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'today', label: 'Bugun' }, { id: 'tasks', label: 'Vazifalar' }, { id: 'log', label: 'Aloqa jurnali' },
@@ -177,7 +187,7 @@ const TaskForm: React.FC<{ users: { id: string; full_name: string }[]; seesAll: 
         <select className={input} value={assignee} onChange={e => setAssignee(e.target.value)}><option value="">Mas’ul: o‘zim</option>{users.map(u => <option key={u.id} value={u.id}>{u.full_name}</option>)}</select>
       ) : <div />}
       <button className={`${btn} justify-center bg-emerald-600 text-white hover:bg-emerald-700`}><Plus className="h-3.5 w-3.5" />Qo‘shish</button>
-      {!customer && <div className="md:col-span-3"><CustomerPicker value={cust} onChange={setCust} /></div>}
+      {!customer && <div className="md:col-span-3"><CustomerPicker value={cust} onChange={setCust} onError={onError} /></div>}
       <input className={`${input} ${customer ? 'md:col-span-6' : 'md:col-span-3'}`} placeholder="Izoh (ixtiyoriy)" value={description} onChange={e => setDescription(e.target.value)} />
     </form>
   );
@@ -253,7 +263,7 @@ const ActivityForm: React.FC<{ customer?: { id: string; name: string } | null; d
   };
   return (
     <form onSubmit={submit} className="grid grid-cols-1 gap-2 md:grid-cols-6">
-      {!customer && !dealId && <div className="md:col-span-2"><CustomerPicker value={cust} onChange={setCust} /></div>}
+      {!customer && !dealId && <div className="md:col-span-2"><CustomerPicker value={cust} onChange={setCust} onError={onError} /></div>}
       <select className={input} value={type} onChange={e => setType(e.target.value)}>{Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
       <select className={input} value={result} onChange={e => setResult(e.target.value)}>{Object.entries(RESULT_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
       <input required className={`${input} ${customer || dealId ? 'md:col-span-4' : 'md:col-span-2'}`} placeholder="Nima gaplashildi, natija" value={note} onChange={e => setNote(e.target.value)} />
@@ -448,7 +458,7 @@ const DealModal: React.FC<{ deal: any; stages: any[]; users: any[]; seesAll: boo
         <div className="flex items-center justify-between"><h2 className="text-sm font-bold">{deal.id ? 'Bitim' : 'Yangi bitim / lid'}</h2><button type="button" onClick={onClose}><X className="h-4 w-4" /></button></div>
         <input required className={input} placeholder="Nomi (masalan: Chilonzor do‘koni — oylik ta’minot)" value={form.title} onChange={e => set('title', e.target.value)} />
         <p className="text-[11px] font-semibold text-neutral-600">Mavjud mijoz</p>
-        <CustomerPicker value={cust} onChange={setCust} />
+        <CustomerPicker value={cust} onChange={setCust} onError={onError} />
         {!cust && (
           <div className="grid grid-cols-2 gap-2">
             <input className={input} placeholder="Kontakt ismi" value={form.contact_name || ''} onChange={e => set('contact_name', e.target.value)} />
@@ -508,13 +518,26 @@ const StageEditor: React.FC<{ stages: any[]; onChanged: () => void; onError: (e:
 const CustomerSearch: React.FC<{ onOpen: (id: string) => void }> = ({ onOpen }) => {
   const [q, setQ] = useState('');
   const [list, setList] = useState<any[]>([]);
-  useEffect(() => { const t = setTimeout(() => api.crm.customers(q).then(r => setList(r.customers)).catch(() => setList([])), 250); return () => clearTimeout(t); }, [q]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    const t = setTimeout(() => {
+      setLoading(true); setError(null);
+      api.crm.customers(q).then(r => { if (current) setList(r.customers); }).catch(e => {
+        if (current) { setList([]); setError(e.message || 'Mijozlarni yuklab bo‘lmadi.'); }
+      }).finally(() => { if (current) setLoading(false); });
+    }, 250);
+    return () => { current = false; clearTimeout(t); };
+  }, [q]);
   return (
     <div className={card}>
       <div className="relative mb-3"><Search className="absolute left-2.5 top-2 h-4 w-4 text-neutral-400" /><input autoFocus className={`${input} pl-8`} placeholder="Mijoz nomi, telefoni yoki kodi" value={q} onChange={e => setQ(e.target.value)} /></div>
+      {loading && <p className="py-2 text-xs text-neutral-500">Mijozlar yuklanmoqda…</p>}
+      {error && <p className="py-2 text-xs text-red-700">Mijozlar olinmadi: {error}</p>}
       <ul className="divide-y divide-neutral-100">
         {list.map(c => <li key={c.id}><button onClick={() => onOpen(c.id)} className="flex w-full justify-between py-2 text-left text-xs hover:bg-neutral-50"><span className="font-semibold">{c.name} <span className="font-normal text-neutral-400">{c.code} · {c.phone}</span></span><span className={c.debt > 0 ? 'font-semibold text-red-600' : 'text-neutral-400'}>{money(c.debt)}</span></button></li>)}
-        {!list.length && <li className="py-2 text-xs text-neutral-400">Topilmadi.</li>}
+        {!loading && !error && !list.length && <li className="py-2 text-xs text-neutral-400">Mos mijoz topilmadi.</li>}
       </ul>
     </div>
   );

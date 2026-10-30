@@ -24,7 +24,7 @@ const profitKnown = (i: OutOfStockLostProfitItem) => (i.purchase_cost || 0) > 1;
  * Out-of-stock products with lost sales and profit: search, filters (category, how long out, system, unknown cost),
  * sorting, totals of what is shown, and Excel of exactly those rows. Used on the dashboard and in the forecast.
  */
-export const StockoutTable: React.FC<{ items: OutOfStockLostProfitItem[]; fileName?: string }> = ({ items, fileName = 'Tugagan_mahsulotlar' }) => {
+export const StockoutTable: React.FC<{ items: OutOfStockLostProfitItem[]; fileName?: string; loading?: boolean; error?: string | null }> = ({ items, fileName = 'Tugagan_mahsulotlar', loading = false, error = null }) => {
   const [q, setQ] = useState('');
   const [category, setCategory] = useState('');
   const [age, setAge] = useState('');
@@ -120,7 +120,7 @@ const estimateLabel = (i: OutOfStockLostProfitItem) => ({
                 <td className="px-3 py-2.5 text-center"><span className="rounded-md bg-indigo-50 px-2 py-0.5 font-bold text-indigo-700">{Math.round((i.daily_sales_avg || 0) * 30)} {i.unit || 'dona'}</span></td>
               </tr>
             ))}
-            {!visible.length && <tr><td colSpan={8} className="py-8 text-center text-neutral-500">{items.length ? 'Filtr bo‘yicha mahsulot topilmadi.' : 'Tugagan tovar yo‘q — barcha xaridorgir mahsulotlar omborda.'}</td></tr>}
+            {!visible.length && <tr><td colSpan={8} className="py-8 text-center text-neutral-500">{loading ? 'Tugagan mahsulotlar yuklanmoqda…' : error ? `Ma’lumot olinmadi: ${error}` : items.length ? 'Filtr bo‘yicha mahsulot topilmadi.' : 'Ulangan ombor ma’lumotida tugagan mahsulot topilmadi.'}</td></tr>}
           </tbody>
           {visible.length > 0 && (
             <tfoot>

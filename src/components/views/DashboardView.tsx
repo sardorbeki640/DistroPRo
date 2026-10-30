@@ -56,6 +56,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [outOfStockData, setOutOfStockData] = useState<any | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState<any | null>(null);
   const [loadingForecast, setLoadingForecast] = useState<boolean>(false);
+  const [forecastError, setForecastError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState<boolean>(false);
 
   // SMS Modal State
@@ -74,16 +75,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const loadForecastAndAI = async (factor: number = runRateFactor) => {
     setLoadingForecast(true);
     try {
-      const [rrRes, outRes, aiRes] = await Promise.all([
-        api.getForecastRunRate(factor).catch(() => null),
-        api.getOutOfStockLostProfit().catch(() => null),
-        api.getAIAnalysis().catch(() => null)
+      const [rrRes, outRes, aiRes] = await Promise.allSettled([
+        api.getForecastRunRate(factor), api.getOutOfStockLostProfit(), api.getAIAnalysis()
       ]);
-      if (rrRes) setRunRateData(rrRes);
-      if (outRes) setOutOfStockData(outRes);
-      if (aiRes?.analysis) setAiAnalysis(aiRes.analysis);
+      const errors: string[] = [];
+      if (rrRes.status === 'fulfilled') setRunRateData(rrRes.value); else errors.push(`Zaxira prognozi: ${rrRes.reason?.message || 'olinmadi'}`);
+      if (outRes.status === 'fulfilled') setOutOfStockData(outRes.value); else errors.push(`Tugagan mahsulotlar: ${outRes.reason?.message || 'olinmadi'}`);
+      if (aiRes.status === 'fulfilled' && aiRes.value?.analysis) setAiAnalysis(aiRes.value.analysis);
+      setForecastError(errors.length ? errors.join('; ') : null);
     } catch (err) {
       console.error('Error fetching dashboard forecast:', err);
+      setForecastError((err as Error)?.message || 'Prognoz ma’lumoti olinmadi.');
     } finally {
       setLoadingForecast(false);
     }
@@ -96,15 +98,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     setOutOfStockData(null);
     setAiAnalysis(null);
     setLoadingForecast(true);
-    Promise.all([
-      api.getForecastRunRate(runRateFactor).catch(() => null),
-      api.getOutOfStockLostProfit().catch(() => null),
-      api.getAIAnalysis().catch(() => null)
+    Promise.allSettled([
+      api.getForecastRunRate(runRateFactor), api.getOutOfStockLostProfit(), api.getAIAnalysis()
     ]).then(([rrRes, outRes, aiRes]) => {
       if (!current) return;
-      if (rrRes) setRunRateData(rrRes);
-      if (outRes) setOutOfStockData(outRes);
-      if (aiRes?.analysis) setAiAnalysis(aiRes.analysis);
+      const errors: string[] = [];
+      if (rrRes.status === 'fulfilled') setRunRateData(rrRes.value); else errors.push(`Zaxira prognozi: ${rrRes.reason?.message || 'olinmadi'}`);
+      if (outRes.status === 'fulfilled') setOutOfStockData(outRes.value); else errors.push(`Tugagan mahsulotlar: ${outRes.reason?.message || 'olinmadi'}`);
+      if (aiRes.status === 'fulfilled' && aiRes.value?.analysis) setAiAnalysis(aiRes.value.analysis);
+      setForecastError(errors.length ? errors.join('; ') : null);
     }).finally(() => { if (current) setLoadingForecast(false); });
     return () => { current = false; };
   }, [runRateFactor, distribution.loaded, distribution.system?.id]);
@@ -137,18 +139,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   };
 
   // Data references with robust fallbacks
-  const inventorySummary = runRateData?.summary || stats?.inventory || {
-    avg_days_remaining: 0,
-    out_of_stock_count: 0,
-    critical_count: 0,
-    low_count: 0,
-    in_stock_count: 0,
-    total_products: 0
-  };
+  const inventorySummary = runRateData?.summary || stats?.inventory || null;
 
   const stockOutItems = outOfStockData?.items || stats?.inventory?.top_out_of_stock || [];
-  const totalLostProfit = outOfStockData?.summary?.total_lost_profit_uzs || stats?.inventory?.total_lost_profit_uzs || 0;
-  const totalLostSales = outOfStockData?.summary?.total_lost_sales_uzs || stats?.inventory?.total_lost_sales_uzs || 0;
+  const totalLostProfit = outOfStockData?.summary?.total_lost_profit_uzs ?? stats?.inventory?.total_lost_profit_uzs ?? null;
+  const totalLostSales = outOfStockData?.summary?.total_lost_sales_uzs ?? stats?.inventory?.total_lost_sales_uzs ?? null;
 
   /** The dashboard figures on two sheets: key indicators and the out-of-stock products. */
   const exportDashboard = async () => {
@@ -439,7 +434,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="p-3.5 rounded-xl bg-neutral-50 border border-neutral-200 text-center">
             <span className="text-[11px] text-neutral-500 block font-medium">O'rtacha Qoldiq Muddati</span>
             <p className="text-2xl font-black text-indigo-700 mt-1">
-              {inventorySummary.avg_days_remaining} <span className="text-sm font-bold">kun</span>
+              {inventorySummary?.avg_days_remaining ?? '—'} <span className="text-sm font-bold">{inventorySummary ? 'kun' : ''}</span>
             </p>
             <span className="text-[10px] text-neutral-500">Joriy tezlikda yetishi</span>
           </div>
@@ -447,7 +442,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-center">
             <span className="text-[11px] text-rose-700 block font-bold">🔴 Tugagan (0 kun)</span>
             <p className="text-2xl font-black text-rose-700 mt-1">
-              {inventorySummary.out_of_stock_count} <span className="text-sm font-bold">ta tovar</span>
+              {inventorySummary?.out_of_stock_count ?? '—'} <span className="text-sm font-bold">{inventorySummary ? 'ta tovar' : ''}</span>
             </p>
             <span className="text-[10px] text-rose-600">Zudlik bilan zakaz zarur</span>
           </div>
@@ -455,7 +450,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-center">
             <span className="text-[11px] text-amber-800 block font-bold">🟠 Kritik (≤3 kun)</span>
             <p className="text-2xl font-black text-amber-700 mt-1">
-              {inventorySummary.critical_count} <span className="text-sm font-bold">ta tovar</span>
+              {inventorySummary?.critical_count ?? '—'} <span className="text-sm font-bold">{inventorySummary ? 'ta tovar' : ''}</span>
             </p>
             <span className="text-[10px] text-amber-600">1-3 kunda tugaydi</span>
           </div>
@@ -463,7 +458,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="p-3.5 rounded-xl bg-yellow-50 border border-yellow-200 text-center">
             <span className="text-[11px] text-yellow-800 block font-bold">🟡 Kam qoldiq (4-7 kun)</span>
             <p className="text-2xl font-black text-yellow-700 mt-1">
-              {inventorySummary.low_count} <span className="text-sm font-bold">ta tovar</span>
+              {inventorySummary?.low_count ?? '—'} <span className="text-sm font-bold">{inventorySummary ? 'ta tovar' : ''}</span>
             </p>
             <span className="text-[10px] text-yellow-600">Zaxirani to'ldirish kerak</span>
           </div>
@@ -471,7 +466,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-center">
             <span className="text-[11px] text-emerald-800 block font-bold">🟢 Yetarli / Barqaror</span>
             <p className="text-2xl font-black text-emerald-700 mt-1">
-              {inventorySummary.in_stock_count} <span className="text-sm font-bold">ta tovar</span>
+              {inventorySummary?.in_stock_count ?? '—'} <span className="text-sm font-bold">{inventorySummary ? 'ta tovar' : ''}</span>
             </p>
             <span className="text-[10px] text-emerald-600">Xavfsiz darajada</span>
           </div>
@@ -495,7 +490,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </span>
               </div>
               <p className="text-xs text-rose-700 mt-0.5">
-                Omborda tovar tugagan kundan beri qancha sotilishi mumkin edi va korxona qancha sof foydadan mahrum bo'lmoqda
+                0 qoldiq sanasi va avvalgi sotuv tezligiga asoslangan taxminiy talab hamda foyda tahlili
               </p>
             </div>
           </div>
@@ -516,12 +511,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               Jami Boy Berilgan Sof Foyda:
             </span>
             <p className="text-2xl font-black text-rose-700 mt-1">
-              {outOfStockData?.summary?.profit_unknown_count ? 'Hisoblanmadi' : formatUZS(totalLostProfit)}
+              {outOfStockData?.summary?.profit_unknown_count ? 'Hisoblanmadi' : totalLostProfit === null ? '—' : formatUZS(totalLostProfit)}
             </p>
             <p className="text-xs text-rose-600 mt-1">
               {outOfStockData?.summary?.profit_unknown_count
                 ? `${outOfStockData.summary.profit_unknown_count} ta tovarning kirim narxi yo‘q (ulangan tizimda kirim narxi kiritilmagan yoki 1 so‘m) — narx kiritilgach hisoblanadi.`
-                : "Agar omborda ushbu tovarlar bo'lganida, bugungi sof foydaga qo'shimcha tushgan bo'lardi."}
+                : 'Taxminiy hisob: nol qoldiq davrida avvalgi o‘rtacha sotuv davom etadi deb olinadi. Bu tasdiqlangan buyurtma yoki real yo‘qotish emas.'}
             </p>
           </div>
 
@@ -530,16 +525,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               Boy Berilgan Yalpi Savdo Tushumi:
             </span>
             <p className="text-2xl font-black text-neutral-900 mt-1">
-              {formatUZS(totalLostSales)}
+              {totalLostSales === null ? '—' : formatUZS(totalLostSales)}
             </p>
             <p className="text-xs text-neutral-600 mt-1">
-              Mijozlar ushbu tovarlarni so'ragan, ammo zaxira yo'qligi sababli buyurtmalar bajarilmadi.
+              Avvalgi sotuv sur’atidan hisoblangan taxminiy tushum; amalga oshmagan buyurtmalarning bevosita summasi emas.
             </p>
           </div>
         </div>
 
         {/* Per-product lost sales and profit: filters, sorting, totals and Excel */}
-        <StockoutTable items={stockOutItems} />
+        <StockoutTable items={stockOutItems} loading={loadingForecast} error={forecastError} />
       </div>
 
       {/* SECTION 3: QAT'IY NASIYA NAZORATI & KREDIT LIMITLARI */}

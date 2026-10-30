@@ -100,15 +100,22 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
 
   const loadData = async () => {
     setIsLoading(true);
+    setActionError(null);
     try {
-      const [empRes, salRes] = await Promise.all([
+      const [empRes, salRes] = await Promise.allSettled([
         api.getEmployees(),
         api.getSalaries(currentMonth)
       ]);
-      setEmployees(empRes.employees || []);
-      setSalaries(salRes.salaries || []);
+      const errors: string[] = [];
+      if (empRes.status === 'fulfilled') setEmployees(empRes.value.employees || []);
+      else { setEmployees([]); errors.push(`Xodimlar: ${empRes.reason?.message || 'yuklanmadi'}`); }
+      if (salRes.status === 'fulfilled') setSalaries(salRes.value.salaries || []);
+      else { setSalaries([]); errors.push(`Maoshlar: ${salRes.reason?.message || 'yuklanmadi'}`); }
+      if (errors.length) setActionError(errors.join('; '));
     } catch (err: any) {
       console.error('Error fetching employees/salaries:', err);
+      setEmployees([]); setSalaries([]);
+      setActionError(err.message || 'Xodimlar va maoshlarni yuklab bo‘lmadi.');
     } finally {
       setIsLoading(false);
     }

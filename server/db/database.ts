@@ -173,7 +173,7 @@ class DatabaseManager {
       if (Number(r.seq) > maxSeq) maxSeq = Number(r.seq);
       // Keep Render's 5-second health check responsive even while restoring a
       // large Turso snapshot on a single-core free instance.
-      if (++processed % 25 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+      if (++processed % 500 === 0) await new Promise<void>(resolve => setImmediate(resolve));
     }
     this.nextSeq = maxSeq + 1;
   }
@@ -188,9 +188,11 @@ class DatabaseManager {
       throw new Error('Turso ulanishi uchun TURSO_DATABASE_URL va TURSO_AUTH_TOKEN sozlanishi kerak.');
     }
 
+    const startedAt = Date.now();
+    let restoredRows = 0;
     const client = createClient({ url, ...(authToken ? { authToken } : {}) });
     await client.execute('CREATE TABLE IF NOT EXISTS distropro_rows (tbl TEXT NOT NULL, k TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tbl, k))');
-    const pageSize = 2000;
+    const pageSize = 5000;
     // Page on the composite primary key. Ordering/cursoring by seq had no matching
     // index and forced Turso to rescan and resort the entire cloud table per page.
     const firstPage = await client.execute({
@@ -205,6 +207,10 @@ class DatabaseManager {
       await this.reloadFromSqliteYielding();
     } else {
       // Cloud is authoritative after the first sync. Replay the durable local outbox over the snapshot.
+      this.data = JSON.parse(JSON.stringify(INITIAL_EMPTY_SCHEMA));
+      this.index.clear();
+      this.meta = new WeakMap<object, RowMeta>();
+      this.nextSeq = 1;
       const pending = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id').all() as TursoOutboxOp[];
       this.sql.exec('BEGIN IMMEDIATE');
       try {
@@ -213,13 +219,14 @@ class DatabaseManager {
         let page = firstPage;
         let lastTable = '';
         let lastKey = '';
-        let restoredRows = 0;
         while (page.rows.length) {
           for (const row of page.rows as any[]) {
-            put.run(String(row.tbl), String(row.k), Number(row.seq), String(row.data));
-            lastTable = String(row.tbl);
-            lastKey = String(row.k);
-            if (++restoredRows % 25 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+            const tableName = String(row.tbl), key = String(row.k), seq = Number(row.seq), data = String(row.data);
+            put.run(tableName, key, seq, data);
+            this.hydrateMemoryRow(tableName, key, seq, data);
+            lastTable = tableName;
+            lastKey = key;
+            if (++restoredRows % 500 === 0) await new Promise<void>(resolve => setImmediate(resolve));
           }
           if (page.rows.length < pageSize) break;
           page = await client.execute({
@@ -231,17 +238,63 @@ class DatabaseManager {
         }
         await this.applyOutboxToLocal(pending);
         this.sql.exec('COMMIT');
+        await this.applyOutboxToMemory(pending);
+        this.nextSeq = Math.max(this.nextSeq, ...pending.filter(op => op.seq !== null).map(op => Number(op.seq) + 1), 1);
       } catch (error) {
         try { this.sql.exec('ROLLBACK'); } catch { /* not started */ }
         throw error;
       }
-      await this.reloadFromSqliteYielding();
+      // The cloud snapshot is already in memory. Re-reading the just-written
+      // local cache here doubled JSON parsing on every cold start.
     }
 
     this.turso = client;
     await this.flushTurso();
     this.scheduleTursoFlush();
-    console.log('[Turso] Ulanish tayyor; ma’lumotlar masofaviy bazaga sinxronlanadi.');
+    console.log(`[Turso] Ulanish tayyor; ${restoredRows} qator ${Date.now() - startedAt} ms da tiklandi.`);
+  }
+
+  /** Load a cloud row into the live in-memory view while the optional SQLite cache is populated. */
+  private hydrateMemoryRow(tableName: string, key: string, seq: number, serialized: string): void {
+    const row = this.deserialize(tableName, JSON.parse(serialized));
+    const table = ((this.data as any)[tableName] ||= []) as any[];
+    table.push(row);
+    this.meta.set(row, { key, seq });
+    this.indexOf(tableName).set(key, row);
+    if (seq >= this.nextSeq) this.nextSeq = seq + 1;
+  }
+
+  /** Replay the durable outbox over a cloud snapshot in memory, in the same order as its SQLite replay. */
+  private async applyOutboxToMemory(ops: TursoOutboxOp[]): Promise<void> {
+    let processed = 0;
+    for (const op of ops) {
+      const table = ((this.data as any)[op.tbl] ||= []) as any[];
+      const index = this.indexOf(op.tbl);
+      if (op.op === 'clear') {
+        (this.data as any)[op.tbl] = [];
+        index.clear();
+      } else if (op.op === 'delete' && op.k !== null) {
+        const old = index.get(op.k);
+        if (old) {
+          const at = table.indexOf(old);
+          if (at >= 0) table.splice(at, 1);
+          this.meta.delete(old);
+          index.delete(op.k);
+        }
+      } else if (op.op === 'upsert' && op.k !== null && op.seq !== null && op.data !== null) {
+        const row = this.deserialize(op.tbl, JSON.parse(op.data));
+        const old = index.get(op.k);
+        if (old) {
+          const at = table.indexOf(old);
+          if (at >= 0) table[at] = row; else table.push(row);
+          this.meta.delete(old);
+        } else table.push(row);
+        this.meta.set(row, { key: op.k, seq: Number(op.seq) });
+        index.set(op.k, row);
+        this.nextSeq = Math.max(this.nextSeq, Number(op.seq) + 1);
+      }
+      if (++processed % 500 === 0) await new Promise<void>(resolve => setImmediate(resolve));
+    }
   }
 
   private async applyOutboxToLocal(ops: TursoOutboxOp[]): Promise<void> {

@@ -575,8 +575,8 @@ const SettingsTab: React.FC<{ employees: any[]; onError: (e: string) => void; on
   const [zoneMsg, setZoneMsg] = useState<{ ok: boolean; text: string } | null>(null);
   useEffect(() => {
     api.attendance.settings().then(r => setS(r.settings)).catch(e => onError(e.message));
-    api.getMe().then(r => setSuperAdmin(!!r.user?.is_super_admin)).catch(() => {});
-    api.attendance.agents().then(r => setAgents(r.agents)).catch(() => {});
+    api.getMe().then(r => setSuperAdmin(!!r.user?.is_super_admin)).catch(e => onError(e.message));
+    api.attendance.agents().then(r => setAgents(r.agents)).catch(e => onError(e.message));
   }, []);
   if (!s) return null;
   const rules: any[] = s.rules || [];
