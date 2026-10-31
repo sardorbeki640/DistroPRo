@@ -743,41 +743,46 @@ class DatabaseManager {
     if (tableName === 'audit_logs') throw new Error('Security Violation: Audit logs cannot be edited.');
     return this.transaction(() => {
       const t = tableName as string;
-      const previous = this.data[tableName] as any[];
+      const table = this.data[tableName] as any[];
       this.inheritSource(t, records as any[]);
-      const table = previous.slice();
-      const position = new Map<string, number>(table.map((row: any, i: number) => [row.id, i]));
       const idx = this.indexOf(t);
-      const replaced: [string, any][] = [];
-      const added: string[] = [];
+      const replaced: { key: string; row: any; before: any }[] = [];
+      const added: { key: string; row: any }[] = [];
       let inserted = 0;
       let updated = 0;
       for (const record of records as any[]) {
-        const i = position.get(record.id);
-        if (i === undefined) {
+        const key = String(record.id);
+        const old = idx.get(key);
+        if (!old || old.id !== record.id) {
           const m = this.ensureMeta(t, record);
-          position.set(record.id, table.length);
           table.push(record);
           this.touch(t, m.key);
-          added.push(m.key);
+          added.push({ key: m.key, row: record });
           inserted++;
         } else {
-          const old = table[i];
-          const merged = { ...old, ...record };
           const m = this.meta.get(old) || this.ensureMeta(t, old);
-          this.meta.set(merged, m);
-          table[i] = merged;
-          replaced.push([m.key, old]);
-          idx.set(m.key, merged);
+          replaced.push({ key: m.key, row: old, before: { ...old } });
+          Object.assign(old, record);
+          idx.set(m.key, old);
           this.touch(t, m.key);
           updated++;
         }
       }
-      (this.data as any)[tableName] = table;
       this.journal.push(() => {
-        (this.data as any)[tableName] = previous;
-        for (const key of added) { idx.delete(key); this.touch(t, key); }
-        for (const [key, old] of replaced) { idx.set(key, old); this.touch(t, key); }
+        for (let i = added.length - 1; i >= 0; i--) {
+          const { key, row } = added[i];
+          const at = table.lastIndexOf(row);
+          if (at >= 0) table.splice(at, 1);
+          idx.delete(key);
+          this.touch(t, key);
+        }
+        for (let i = replaced.length - 1; i >= 0; i--) {
+          const { key, row, before } = replaced[i];
+          for (const field of Object.keys(row)) if (!(field in before)) delete row[field];
+          Object.assign(row, before);
+          idx.set(key, row);
+          this.touch(t, key);
+        }
       });
       return { inserted, updated };
     });

@@ -44,6 +44,13 @@ export interface HistoryState {
   ledger_rows?: number;
 }
 
+type OrderStoreIndexes = {
+  customers: Map<string, Customer>;
+  products: Map<string, Product>;
+  ordersByExternal: Map<string, SalesOrder>;
+  agentByCode: Map<string, string>;
+};
+
 // A month older than this is final in SalesDoc (orders are delivered or cancelled) and is not re-downloaded.
 const SETTLED_AFTER_DAYS = 45;
 // Without a configured start date, the search goes back until this many empty months in a row.
@@ -668,30 +675,45 @@ export class SalesDocHistoryService {
     // yield between batches so the free Render instance can answer health checks.
     let stored = 0;
     let skipped = 0;
+    const sourceRow = (row: { source_integration_id?: string | null }) => !row.source_integration_id || row.source_integration_id === integrationId;
+    // A week may need many 50-order transactions. Build the lookup tables once
+    // for the whole week instead of rescanning all history rows for every batch.
+    const indexes: OrderStoreIndexes = {
+      customers: new Map(db.find('customers', c => c.company_id === companyId && !!c.code && sourceRow(c)).map(c => [canonicalCustomerCode(c.code), c])),
+      products: new Map(db.find('products', p => p.company_id === companyId && sourceRow(p)).map(p => [p.sku, p])),
+      ordersByExternal: new Map(db.find('sales_orders', o => o.company_id === companyId && !!o.external_id && sourceRow(o)).map(o => [o.external_id!, o])),
+      agentByCode: new Map()
+    };
+    for (const agent of db.find('agents', a => a.company_id === companyId && !!a.code && sourceRow(a))) {
+      for (const code of [agent.code, ...(agent.external_codes || [])]) if (code) indexes.agentByCode.set(String(code), agent.id);
+    }
+    const replacedOrderIds = new Set<string>();
+    const replacementItems: SalesOrderItem[] = [];
     const batchSize = 50;
     for (let offset = 0; offset < orders.length; offset += batchSize) {
-      const result = this.storeOrdersChunk(companyId, userId, orders.slice(offset, offset + batchSize), errors, integrationId, createAgents);
+      const result = this.storeOrdersChunk(companyId, userId, orders.slice(offset, offset + batchSize), errors, integrationId, createAgents, indexes, replacedOrderIds, replacementItems);
       stored += result.stored;
       skipped += result.skipped;
       await new Promise<void>(resolve => setImmediate(resolve));
     }
+    if (replacedOrderIds.size) {
+      // Replace lines for a bounded date range in one pass. Doing this once for
+      // every 50 orders rescanned the growing history table quadratically.
+      db.transaction(() => {
+        db.removeWhere('sales_order_items', item => replacedOrderIds.has(item.sales_order_id));
+        if (replacementItems.length) db.upsertMany('sales_order_items', replacementItems);
+      });
+    }
     return { stored, skipped };
   }
 
-  private static storeOrdersChunk(companyId: string, userId: string, orders: ExternalSyncOrder[], errors: string[], integrationId?: string, createAgents = false) {
+  private static storeOrdersChunk(companyId: string, userId: string, orders: ExternalSyncOrder[], errors: string[], integrationId?: string, createAgents = false, indexes?: OrderStoreIndexes, replacedOrderIds = new Set<string>(), replacementItems: SalesOrderItem[] = []) {
     const now = new Date().toISOString();
     let stored = 0;
     let skipped = 0;
     db.transaction(() => {
-      const sourceRow = (row: { source_integration_id?: string | null }) => !row.source_integration_id || row.source_integration_id === integrationId;
-      const customers = new Map<string, Customer>(db.find('customers', c => c.company_id === companyId && !!c.code && sourceRow(c)).map(c => [canonicalCustomerCode(c.code), c]));
-      const productBySku = new Map<string, Product>(db.find('products', p => p.company_id === companyId && sourceRow(p)).map(p => [p.sku, p]));
-      const ordersByExternal = new Map<string, SalesOrder>(db.find('sales_orders', o => o.company_id === companyId && !!o.external_id && sourceRow(o)).map(o => [o.external_id!, o]));
-      // SalesDoc agent ids (d0_1 …) are stored as agents.code.
-      const agentByCode = new Map<string, string>();
-      for (const agent of db.find('agents', a => a.company_id === companyId && !!a.code && sourceRow(a))) {
-        for (const code of [agent.code, ...(agent.external_codes || [])]) if (code) agentByCode.set(String(code), agent.id);
-      }
+      const activeIndexes = indexes || { customers: new Map(), products: new Map(), ordersByExternal: new Map(), agentByCode: new Map() } as OrderStoreIndexes;
+      const { customers, products: productBySku, ordersByExternal, agentByCode } = activeIndexes;
       const newAgents: Agent[] = [];
       if (createAgents) {
         for (const order of orders) {
@@ -744,7 +766,7 @@ export class SalesDocHistoryService {
         // A customer without an agent gets the agent of its most recent order (months load newest first).
         if (row.agent_id && !customer.agent_id && !customerAgent.has(customer.id)) customerAgent.set(customer.id, row.agent_id);
         if (cogs) {
-          withLines.add(id);
+          replacedOrderIds.add(id);
           for (const line of cogs.lines) itemRows.push({ ...line, id: randomUUID(), sales_order_id: id, ...(integrationId ? { source_integration_id: integrationId } : {}) });
         }
         stored++;
@@ -755,10 +777,8 @@ export class SalesDocHistoryService {
       const newIds = new Set(newCustomers.map(c => c.id));
       const existingAssigned = [...customerAgent].filter(([id]) => !newIds.has(id));
       if (existingAssigned.length) db.upsertMany('customers', existingAssigned.map(([id, agent_id]) => ({ ...db.findById('customers', id)!, agent_id })));
-      const changed = withLines;
-      db.removeWhere('sales_order_items', i => changed.has(i.sales_order_id));
       if (orderRows.length) db.upsertMany('sales_orders', orderRows);
-      if (itemRows.length) db.upsertMany('sales_order_items', itemRows);
+      replacementItems.push(...itemRows);
     });
     return { stored, skipped };
   }
