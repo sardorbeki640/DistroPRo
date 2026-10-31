@@ -11,7 +11,7 @@ export type HistoryAdapter = SalesDocAdapter | LinkoAdapter;
 import { ForecastService } from './forecast.service.ts';
 import { canonicalCustomerCode, computeOrderCogs, isPlausibleCost } from './cogs.ts';
 import { inventoryObservation } from './inventory-observation.ts';
-import { addDays, businessToday, isValidIsoDate } from '../utils/date.ts';
+import { addDays, businessToday, BUSINESS_TIME_ZONE, isValidIsoDate } from '../utils/date.ts';
 import { NotificationService } from './notification.service.ts';
 import { escapeHtml } from './telegram.service.ts';
 import { territoryIdFor } from './territory.ts';
@@ -56,6 +56,13 @@ const SETTLED_AFTER_DAYS = 45;
 // Without a configured start date, the search goes back until this many empty months in a row.
 const EMPTY_MONTHS_TO_STOP = 12;
 const OLDEST_MONTH = '2010-01';
+
+function nextSalesDocStockWindow(now: number): string {
+  const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: BUSINESS_TIME_ZONE, hour: '2-digit', hourCycle: 'h23' }).format(new Date(now)));
+  const today = businessToday(new Date(now));
+  const targetDate = hour >= 20 ? addDays(today, 1) : today;
+  return new Date(`${targetDate}T20:00:00+05:00`).toISOString();
+}
 
 const monthKey = (date: string) => date.slice(0, 7);
 // Raise when customer cards must be read again right away (e.g. the territory field changed).
@@ -102,6 +109,8 @@ export class SalesDocHistoryService {
     if (history.complete && history.start_date === start) return { skipped: true, complete: true, unresolved: unresolved().length };
     if (unresolved().length === 0) return { skipped: true, complete: true, unresolved: 0 };
     const lastRequest = Date.parse(history.last_request_at || '') || 0;
+    const retryAfter = Date.parse(history.retry_after || '') || 0;
+    if (now < retryAfter) return { skipped: true, reason: 'SalesDoctor tarixiy qoldiq oynasi boshlanishini kutmoqda', retry_after: history.retry_after };
     if (now - lastRequest < 5 * 60_000) return { skipped: true, reason: 'SalesDoctor tarixiy qoldiq API cheklovi' };
 
     this.stockHistoryRunning.add(integrationId);
@@ -146,7 +155,7 @@ export class SalesDocHistoryService {
       }
       const nextHistory = {
         ...history, start_date: start, warehouses, date: nextDate, warehouse_index: nextWarehouseIndex,
-        quantities: nextTotals, last_request_at, complete,
+        quantities: nextTotals, last_request_at, retry_after: null, complete,
         finished_at: complete ? new Date(now).toISOString() : null,
         last_error: null
       };
@@ -154,7 +163,14 @@ export class SalesDocHistoryService {
       return { skipped: false, date, warehouse: warehouses[warehouseIndex].name, resolved, complete, unresolved: unresolved().length };
     } catch (err: any) {
       const latest = db.findById('integrations', integrationId)!;
-      const stockout_history = { ...(latest.config?.stockout_history || history), last_request_at: new Date(now).toISOString(), last_error: String(err?.message || err) };
+      const errorMessage = String(err?.message || err);
+      const waitForNightWindow = /allowed time.*20:00.*08:00/i.test(errorMessage);
+      const stockout_history = {
+        ...(latest.config?.stockout_history || history),
+        last_request_at: new Date(now).toISOString(),
+        retry_after: waitForNightWindow ? nextSalesDocStockWindow(now) : null,
+        last_error: errorMessage
+      };
       db.update('integrations', integrationId, { config: { ...latest.config, stockout_history } });
       console.warn('[SalesDocHistory] tarixiy ombor qoldig‘i:', err.message);
       return { skipped: false, error: String(err?.message || err) };

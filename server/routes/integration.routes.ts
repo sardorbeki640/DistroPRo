@@ -569,6 +569,7 @@ router.get('/:provider/history-status', requireAuth, requirePermission('integrat
       stockout_history: stockHistory ? {
         date: stockHistory.date || null, complete: stockHistory.complete === true,
         last_error: stockHistory.last_error || null, last_request_at: stockHistory.last_request_at || null,
+        retry_after: stockHistory.retry_after || null,
         finished_at: stockHistory.finished_at || null, warehouse_index: stockHistory.warehouse_index || 0,
         warehouse_count: Array.isArray(stockHistory.warehouses) ? stockHistory.warehouses.length : 0,
         unresolved_count: db.find('products', p => p.company_id === companyId && p.source_integration_id === integration.id && p.is_active && (Number(p.stock_quantity) || 0) <= 0 && !p.stockout_started_at).length

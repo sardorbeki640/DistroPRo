@@ -611,7 +611,9 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
               {stockoutHistory && historyRecord?.capabilities?.historicalStock && (
                 <p className={stockoutHistory.last_error ? 'font-semibold text-red-700' : 'text-neutral-600'}>
                   {stockoutHistory.last_error
-                    ? `Tarixiy ombor qoldig‘i olinmadi: ${stockoutHistory.last_error}`
+                    ? stockoutHistory.retry_after
+                      ? `SalesDoctor tarixiy ombor tarixini faqat 20:00–08:00 oralig‘ida beradi. Hozirgi xato: ${stockoutHistory.last_error}. Avtomatik qayta urinish: ${new Date(stockoutHistory.retry_after).toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' })}.`
+                      : `Tarixiy ombor qoldig‘i olinmadi: ${stockoutHistory.last_error}`
                     : stockoutHistory.complete
                       ? `Buyurtmalar tarixidan alohida ombor tarixi tekshirildi · tanlangan davrda ijobiy qoldig‘i topilmagan: ${stockoutHistory.unresolved_count || 0} ta mahsulot`
                       : `Buyurtmalar tarixi yuklangan bo‘lsa ham, nolga tushgan sanani aniqlash alohida davom etadi · tekshirilayotgan kun: ${stockoutHistory.date || 'boshlanmoqda'} · omborlar: ${stockoutHistory.warehouse_count || 0} ta · SalesDoctor limiti: har 5 daqiqada 1 kunlik so‘rov`}
