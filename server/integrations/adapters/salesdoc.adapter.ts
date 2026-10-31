@@ -191,17 +191,22 @@ export class SalesDocAdapter implements IntegrationAdapter {
       // A few SalesDoc endpoints return HTTP 200 with status=false but omit the
       // documented `error` object. Preserve the provider's message instead of
       // collapsing these responses into an unhelpful generic error.
-      if (data?.status === false && !data?.error) {
+      const documentedErrorMessage = typeof data?.error?.message === 'string' && data.error.message.trim() && data.error.message !== 'Error'
+        ? data.error.message.trim() : '';
+      if (data?.status === false && !documentedErrorMessage) {
         const message = [data?.message, data?.result?.message, data?.result?.error, data?.data?.message]
           .find(value => typeof value === 'string' && value.trim());
-        const details = data?.result?.data ?? data?.data ?? data?.result ?? undefined;
+        const details = data?.error?.data ?? data?.result?.data ?? data?.data ?? data?.result ?? undefined;
+        const providerCode = Number(data?.error?.code || data?.code) || 0;
+        const responseFields = Object.keys(data || {}).filter(key => !['token', 'auth', 'password'].includes(key));
+        const errorFields = Object.keys(data?.error || {});
         return {
           ...data,
           status: false,
           transport: response.status >= 500,
           error: {
-            code: Number(data?.code || response.status) || response.status,
-            message: message || 'SalesDoctor status=false javobini qaytardi (error.message yo‘q)',
+            code: providerCode || response.status,
+            message: message || `SalesDoctor status=false: HTTP ${response.status}${providerCode ? `, provider kodi ${providerCode}` : ''}; javob maydonlari: ${responseFields.join(', ') || 'yo‘q'}; error maydonlari: ${errorFields.join(', ') || 'yo‘q'}`,
             data: details
           }
         };
