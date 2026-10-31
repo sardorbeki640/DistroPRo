@@ -239,10 +239,32 @@ export class SalesDocHistoryService {
           emptyStreak = known.orders ? 0 : emptyStreak + 1;
           if (known.orders) earliestWithOrders = month;
         } else {
-          const orders = await this.fetchRange(adapter, config, from, to, !isLinko);
-          // Switched off while this month was downloading: it is not stored.
-          this.checkStop(integrationId);
-          const { stored, skipped } = await this.storeOrders(companyId, userId, orders, state.errors, integrationId, true);
+          // SalesDoc months can contain thousands of orders and lines. Fetch and
+          // persist one week at a time so a single large month cannot starve the
+          // Render free instance's 5s health check or hold the whole month in RAM.
+          const ranges: Array<{ from: string; to: string }> = [];
+          if (adapter instanceof SalesDocAdapter) {
+            for (let rangeStart = from; rangeStart <= to;) {
+              const rangeEnd = addDays(rangeStart, Math.min(6, Math.round((Date.parse(to) - Date.parse(rangeStart)) / 86400000)));
+              ranges.push({ from: rangeStart, to: rangeEnd });
+              rangeStart = addDays(rangeEnd, 1);
+            }
+          } else ranges.push({ from, to });
+
+          let stored = 0;
+          let skipped = 0;
+          for (const range of ranges) {
+            this.checkStop(integrationId);
+            const orders = await this.fetchRange(adapter, config, range.from, range.to, !isLinko);
+            // Switched off while this range was downloading: it is not stored.
+            this.checkStop(integrationId);
+            const result = await this.storeOrders(companyId, userId, orders, state.errors, integrationId, true);
+            stored += result.stored;
+            skipped += result.skipped;
+            // Keep health checks and other requests responsive between bounded
+            // external reads even when a month has many weeks of data.
+            await new Promise<void>(resolve => setImmediate(resolve));
+          }
           state.chunks[month] = { from, to, orders: stored, skipped, synced_at: new Date().toISOString() };
           state.skipped += skipped;
           emptyStreak = stored ? 0 : emptyStreak + 1;
