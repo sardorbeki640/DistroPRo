@@ -24,7 +24,6 @@ export function runDueSyncs(now = Date.now()): string[] {
   const started: string[] = [];
   for (const integration of db.find('integrations', i => i.status === 'CONNECTED')) {
     const interval = parseSyncInterval(integration.config?.sync_interval);
-    if (!interval) continue;
     // Systems that give their order history (SalesDoctor, Linko, …) load it month by month in the background.
     let adapter: any = null;
     try { adapter = integrationProvider.getAdapter(integration.provider_name); } catch { continue; }
@@ -38,6 +37,10 @@ export function runDueSyncs(now = Date.now()): string[] {
       void SalesDocHistoryService.syncSalesDocStockoutHistory(integration.company_id, integration.id, adapter as any)
         .catch(err => console.warn('[Scheduler] SalesDoctor tarixiy qoldig‘i:', err.message));
     }
+    // Historical stock dating is a separate provider job. It must continue even
+    // when routine order sync has no interval configured; its own 5-minute
+    // provider throttle controls the request rate.
+    if (!interval) continue;
     // Historical stock dating is an explicit full-history job and continues to
     // completion even when routine automatic order imports are disabled.
     if (integration.config?.auto_sync === false) continue;

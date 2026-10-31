@@ -613,8 +613,8 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
                   {stockoutHistory.last_error
                     ? `Tarixiy ombor qoldig‘i olinmadi: ${stockoutHistory.last_error}`
                     : stockoutHistory.complete
-                      ? `Qoldiq tugagan sanalar tarixdan tekshirildi · sanasi topilmagan: ${stockoutHistory.unresolved_count || 0} ta mahsulot`
-                      : `Qoldiq tugagan sanalar SalesDoctor tarixidan olinmoqda · tekshirilayotgan kun: ${stockoutHistory.date || 'boshlanmoqda'} · omborlar: ${stockoutHistory.warehouse_count || 0} ta`}
+                      ? `Buyurtmalar tarixidan alohida ombor tarixi tekshirildi · tanlangan davrda ijobiy qoldig‘i topilmagan: ${stockoutHistory.unresolved_count || 0} ta mahsulot`
+                      : `Buyurtmalar tarixi yuklangan bo‘lsa ham, nolga tushgan sanani aniqlash alohida davom etadi · tekshirilayotgan kun: ${stockoutHistory.date || 'boshlanmoqda'} · omborlar: ${stockoutHistory.warehouse_count || 0} ta · SalesDoctor limiti: har 5 daqiqada 1 kunlik so‘rov`}
                 </p>
               )}
             </div>
