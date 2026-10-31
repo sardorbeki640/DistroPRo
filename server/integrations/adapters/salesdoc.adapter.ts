@@ -194,19 +194,24 @@ export class SalesDocAdapter implements IntegrationAdapter {
       const documentedErrorMessage = typeof data?.error?.message === 'string' && data.error.message.trim() && data.error.message !== 'Error'
         ? data.error.message.trim() : '';
       if (data?.status === false && !documentedErrorMessage) {
-        const message = [data?.message, data?.result?.message, data?.result?.error, data?.data?.message]
+        const message = [data?.message, data?.error, data?.result?.message, data?.result?.error, data?.data?.message]
           .find(value => typeof value === 'string' && value.trim());
         const details = data?.error?.data ?? data?.result?.data ?? data?.data ?? data?.result ?? undefined;
         const providerCode = Number(data?.error?.code || data?.code) || 0;
         const responseFields = Object.keys(data || {}).filter(key => !['token', 'auth', 'password'].includes(key));
-        const errorFields = Object.keys(data?.error || {});
+        const errorFields = data?.error && typeof data.error === 'object' ? Object.keys(data.error) : [];
+        const secretValues = [payload?.auth?.token, payload?.auth?.password, payload?.auth?.login]
+          .filter((value): value is string => typeof value === 'string' && value.length >= 4);
+        const safeMessage = typeof message === 'string'
+          ? secretValues.reduce((text, secret) => text.split(secret).join('[yashirilgan]'), message).slice(0, 500)
+          : '';
         return {
           ...data,
           status: false,
           transport: response.status >= 500,
           error: {
             code: providerCode || response.status,
-            message: message || `SalesDoctor status=false: HTTP ${response.status}${providerCode ? `, provider kodi ${providerCode}` : ''}; javob maydonlari: ${responseFields.join(', ') || 'yo‘q'}; error maydonlari: ${errorFields.join(', ') || 'yo‘q'}`,
+            message: safeMessage || `SalesDoctor status=false: HTTP ${response.status}${providerCode ? `, provider kodi ${providerCode}` : ''}; javob maydonlari: ${responseFields.join(', ') || 'yo‘q'}; error maydonlari: ${errorFields.join(', ') || 'yo‘q'}`,
             data: details
           }
         };
