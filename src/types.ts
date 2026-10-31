@@ -262,7 +262,7 @@ export interface IntegrationRecord {
   last_sync_at?: string | null;
   /** Shown name of the system (SalesDoctor, Linko, …) and what it can do; null for non-distribution integrations. */
   system_name?: string;
-  capabilities?: { payments: boolean; visits: boolean; priceTypes: boolean; paymentTypes: boolean; history: boolean } | null;
+  capabilities?: { payments: boolean; visits: boolean; priceTypes: boolean; paymentTypes: boolean; history: boolean; historicalStock?: boolean } | null;
 }
 
 export interface Employee {
@@ -478,6 +478,7 @@ export interface OutOfStockLostProfitItem {
   daily_sales_avg: number;            // daily sales while the product was in stock
   days_out_of_stock: number | null;   // null: date unknown (never sold, never seen in stock)
   out_of_stock_since: string | null;
+  stockout_date_accuracy?: 'HISTORICAL' | 'OBSERVED' | 'UNKNOWN';
   zero_stock_observed_at?: string | null;
   stock_observed_at?: string | null;
   estimate_status?: 'ESTIMATED' | 'STOCKOUT_DATE_UNKNOWN' | 'NO_DEMAND_DATA' | 'PRICE_UNKNOWN';
@@ -488,11 +489,10 @@ export interface OutOfStockLostProfitItem {
   source: string;
 }
 
-/** Elapsed calendar days since the first confirmed zero-stock snapshot. */
+/** Label used when no provider-verified depletion date is available. */
 export function stockOutLabel(item: { days_out_of_stock: number | null }): string {
-  if (item.days_out_of_stock === null || item.days_out_of_stock === undefined) return '0 qoldiq sanasi aniqlanmagan';
-  if (item.days_out_of_stock === 0) return '0 qoldiq bugun qayd etildi';
-  return `0 qoldiq ${item.days_out_of_stock} kundan beri qayd etilgan`;
+  if (item.days_out_of_stock === null || item.days_out_of_stock === undefined) return 'Qoldiq tugagan sana aniqlanmagan';
+  return `0 qoldiq ${item.days_out_of_stock} kun davomida qayd etilgan`;
 }
 
 export interface StockRunRateResponse {

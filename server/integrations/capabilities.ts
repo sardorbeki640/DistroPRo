@@ -8,6 +8,7 @@ export function capabilitiesOf(adapter: IntegrationAdapter): DistributionCapabil
     visits: typeof a.importVisits === 'function',
     priceTypes: typeof a.listPriceTypes === 'function',
     paymentTypes: typeof a.listPaymentTypes === 'function',
-    history: typeof a.importOrders === 'function' && typeof a.importProducts === 'function' && typeof a.readAll === 'function'
+    history: typeof a.importOrders === 'function' && typeof a.importProducts === 'function' && typeof a.readAll === 'function',
+    historicalStock: typeof a.listWarehouses === 'function' && typeof a.importStockForDate === 'function'
   };
 }

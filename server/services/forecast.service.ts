@@ -45,6 +45,7 @@ export interface OutOfStockLostProfitItem {
   daily_sales_avg: number;            // daily sales while the product was in stock
   days_out_of_stock: number | null;   // null: no sale and no in-stock sighting to date it
   out_of_stock_since: string | null;
+  stockout_date_accuracy: 'HISTORICAL' | 'OBSERVED' | 'UNKNOWN';
   zero_stock_observed_at: string | null;
   stock_observed_at: string | null;
   estimate_status: 'ESTIMATED' | 'STOCKOUT_DATE_UNKNOWN' | 'NO_DEMAND_DATA' | 'PRICE_UNKNOWN';
@@ -258,8 +259,9 @@ export class ForecastService {
    * Evaluates Stock-Out items, days missing, lost sales, and lost net profit
    */
   /** First verified zero-stock snapshot. Legacy rows fall back to their latest known inventory snapshot. */
-  public static outOfStockSince(p: Pick<Product, 'zero_stock_observed_at' | 'stock_observed_at'>): string | null {
-    const since = p.zero_stock_observed_at || p.stock_observed_at;
+  public static outOfStockSince(p: Pick<Product, 'zero_stock_observed_at' | 'stock_observed_at' | 'stockout_started_at' | 'source'>): string | null {
+    // SalesDoc has a dated stock endpoint: never call a first-seen-zero observation the actual depletion date.
+    const since = p.stockout_started_at || (p.source === 'SALESDOC' ? null : p.zero_stock_observed_at || p.stock_observed_at);
     return isValidIsoDate(since) && since <= businessToday() ? since : null;
   }
 
@@ -364,6 +366,7 @@ export class ForecastService {
         daily_sales_avg: Number(dailyAvg.toFixed(3)),
         days_out_of_stock: daysOut,
         out_of_stock_since: since,
+        stockout_date_accuracy: p.stockout_started_at ? 'HISTORICAL' : since ? 'OBSERVED' : 'UNKNOWN',
         zero_stock_observed_at: since,
         stock_observed_at: stockObservedAt,
         estimate_status: estimateStatus,

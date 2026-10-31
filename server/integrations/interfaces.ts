@@ -121,6 +121,7 @@ export interface DistributionCapabilities {
   priceTypes: boolean;    // listPriceTypes (selling / purchase price chosen in settings)
   paymentTypes: boolean;  // listPaymentTypes
   history: boolean;       // order history month by month (SalesDocHistoryService)
+  historicalStock: boolean; // dated inventory snapshots for exact stock-out dating
 }
 
 export interface IntegrationAdapter {
@@ -138,6 +139,8 @@ export interface IntegrationAdapter {
   importVisits?(config: Record<string, any>, from: string, to: string): Promise<ExternalVisit[]>;
   listPriceTypes?(config: Record<string, any>): Promise<ExternalPriceType[]>;
   listPaymentTypes?(config: Record<string, any>): Promise<ExternalPaymentType[]>;
+  listWarehouses?(config: Record<string, any>): Promise<Array<{ id: string; name: string }>>;
+  importStockForDate?(config: Record<string, any>, date: string, warehouseId: string): Promise<Array<{ sku: string; quantity: number }>>;
 
   testConnection(config: Record<string, any>): Promise<{ 
     ok: boolean; 

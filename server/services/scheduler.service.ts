@@ -22,7 +22,7 @@ export function parseSyncInterval(value: unknown): number | null {
 
 export function runDueSyncs(now = Date.now()): string[] {
   const started: string[] = [];
-  for (const integration of db.find('integrations', i => i.status === 'CONNECTED' && i.config?.auto_sync !== false)) {
+  for (const integration of db.find('integrations', i => i.status === 'CONNECTED')) {
     const interval = parseSyncInterval(integration.config?.sync_interval);
     if (!interval) continue;
     // Systems that give their order history (SalesDoctor, Linko, …) load it month by month in the background.
@@ -30,6 +30,17 @@ export function runDueSyncs(now = Date.now()): string[] {
     try { adapter = integrationProvider.getAdapter(integration.provider_name); } catch { continue; }
     if (integration.disabled) continue;
     const isSalesDoc = capabilitiesOf(adapter).history;
+    const historicalStockPending = integration.provider_name === 'SALESDOC'
+      && capabilitiesOf(adapter).historicalStock
+      && !!integration.config?.history_start_date
+      && integration.config?.stockout_history?.complete !== true;
+    if (historicalStockPending) {
+      void SalesDocHistoryService.syncSalesDocStockoutHistory(integration.company_id, integration.id, adapter as any)
+        .catch(err => console.warn('[Scheduler] SalesDoctor tarixiy qoldig‘i:', err.message));
+    }
+    // Historical stock dating is an explicit full-history job and continues to
+    // completion even when routine automatic order imports are disabled.
+    if (integration.config?.auto_sync === false) continue;
     const history = integration.config?.history;
     // A download cut off by a restart is resumed after a cooldown, not on each boot.
     const historyStartedAt = Date.parse(history?.started_at || '') || 0;

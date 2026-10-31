@@ -96,6 +96,22 @@ export class SalesDocAdapter implements IntegrationAdapter {
     return list.map((t: any) => ({ id: String(t.SD_id || ''), name: t.name || t.short || t.SD_id, active: t.active !== 'N' }));
   }
 
+  /** 9.22 getWarehouse: warehouses needed to request dated stock snapshots. */
+  public async listWarehouses(config: Record<string, any>): Promise<Array<{ id: string; name: string }>> {
+    const rows = await this.readAll(config, 'getWarehouse', 'warehouse');
+    return rows
+      .map((w: any) => ({ id: String(w.SD_id || w.CS_id || w.code_1C || ''), name: String(w.name || w.SD_id || '') }))
+      .filter(w => !!w.id);
+  }
+
+  /** 9.25 getStockForDate: SalesDoc calculates the warehouse snapshot from its stock operation log. */
+  public async importStockForDate(config: Record<string, any>, date: string, warehouseId: string): Promise<Array<{ sku: string; quantity: number }>> {
+    const result = await this.executeSalesDocMethod(config, 'getStockForDate', { date, store: { SD_id: warehouseId } });
+    if (!Array.isArray(result?.stock)) throw new Error('getStockForDate javobida stock ro‘yxati yo‘q');
+    return result.stock.map((row: any) => ({ sku: String(row.SD_id || row.CS_id || ''), quantity: Number(row.amount) || 0 }))
+      .filter((row: { sku: string }) => !!row.sku);
+  }
+
   // One login per account for the whole server: every new SalesDoc login revokes the previous token,
   // so separate caches per adapter instance (posting, history, sync) would keep logging each other out.
   private static sessionCache = new Map<string, SalesDocSession>();
@@ -717,13 +733,13 @@ export class SalesDocAdapter implements IntegrationAdapter {
         return '';
       };
 
-      // Map balances: in SalesDoc API, negative balance means debt (nasiya qarzdorlik)
+      // SalesDoc uses negative balances for debt; this app uses positive debt
+      // and negative customer advance, so keep the signed value and invert it.
       const debtMap = new Map<string, number>();
       for (const b of balances) {
         const balNum = Number(b.balance) || 0;
-        const debt = balNum < 0 ? Math.abs(balNum) : 0;
         for (const key of [b.SD_id, b.CS_id, b.code_1C, b.client?.SD_id, b.client?.CS_id, b.client?.code_1C]) {
-          if (key) debtMap.set(String(key), debt);
+          if (key) debtMap.set(String(key), balNum);
         }
       }
 
@@ -736,7 +752,8 @@ export class SalesDocAdapter implements IntegrationAdapter {
             name: c.name || c.firmName || c.clientName || 'SalesDoc Mijoz',
             phone: c.tel || c.phone || '',
             address: c.address || '',
-            balance: debt,
+            // SalesDoc's signed balance is negative for debt; this app uses positive debt and negative advance.
+            balance: -Number(debt),
             territory: territoryOf(c) || undefined
           };
         });

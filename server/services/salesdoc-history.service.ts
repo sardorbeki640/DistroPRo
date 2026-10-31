@@ -51,7 +51,7 @@ const OLDEST_MONTH = '2010-01';
 
 const monthKey = (date: string) => date.slice(0, 7);
 // Raise when customer cards must be read again right away (e.g. the territory field changed).
-const CARDS_VERSION = 2;
+const CARDS_VERSION = 3;
 const AGENT_MAPPING_VERSION = 1;
 const monthStart = (key: string) => `${key}-01`;
 function monthEnd(key: string): string {
@@ -69,8 +69,91 @@ class HistoryStopped extends Error {}
 export class SalesDocHistoryService {
   private static running = new Set<string>();
   private static stopRequested = new Set<string>();
+  private static stockHistoryRunning = new Set<string>();
 
   static isRunning(integrationId: string) { return this.running.has(integrationId); }
+
+  /**
+   * SalesDoc's dated stock endpoint returns a full warehouse snapshot and is rate-limited to one call per five minutes.
+   * Walks backwards one warehouse/request at a time, then records the last positive day for currently empty products.
+   * Until a positive historical day is found, the app deliberately reports the stock-out date as unknown.
+   */
+  static async syncSalesDocStockoutHistory(companyId: string, integrationId: string, adapter: SalesDocAdapter, now = Date.now()) {
+    if (this.stockHistoryRunning.has(integrationId)) return { skipped: true };
+    const integration = db.findById('integrations', integrationId);
+    if (!integration || integration.company_id !== companyId || integration.disabled || integration.status !== 'CONNECTED') return { skipped: true };
+    const start = isValidIsoDate(integration.config?.history_start_date) ? integration.config.history_start_date : null;
+    if (!start) return { skipped: true, reason: 'Tarix boshlanish sanasi belgilanmagan' };
+    const today = businessToday();
+    const products = db.find('products', p => p.company_id === companyId && p.source_integration_id === integrationId && p.is_active && (Number(p.stock_quantity) || 0) <= 0);
+    if (!products.length) return { skipped: true, reason: 'Qoldig‘i 0 mahsulot yo‘q' };
+    const currentConfig = integration.config || {};
+    let history = currentConfig.stockout_history || {};
+    if (history.start_date && history.start_date !== start) history = {};
+    const unresolved = () => db.find('products', p => p.company_id === companyId && p.source_integration_id === integrationId && p.is_active && (Number(p.stock_quantity) || 0) <= 0 && !p.stockout_started_at);
+    if (history.complete && history.start_date === start) return { skipped: true, complete: true, unresolved: unresolved().length };
+    if (unresolved().length === 0) return { skipped: true, complete: true, unresolved: 0 };
+    const lastRequest = Date.parse(history.last_request_at || '') || 0;
+    if (now - lastRequest < 5 * 60_000) return { skipped: true, reason: 'SalesDoctor tarixiy qoldiq API cheklovi' };
+
+    this.stockHistoryRunning.add(integrationId);
+    try {
+      const warehouses = Array.isArray(history.warehouses) && history.warehouses.length
+        ? history.warehouses as { id: string; name: string }[]
+        : await adapter.listWarehouses(integration.config);
+      if (!warehouses.length) throw new Error('SalesDoctor omborlari topilmadi; tarixiy qoldiq olinmadi.');
+      let date = isValidIsoDate(history.date) ? history.date : addDays(today, -1);
+      if (date < start) {
+        history = { ...history, start_date: start, complete: true, date, warehouses, finished_at: new Date(now).toISOString() };
+        db.update('integrations', integrationId, { config: { ...currentConfig, stockout_history: history } });
+        return { skipped: true, complete: true, unresolved: unresolved().length };
+      }
+      const warehouseIndex = Number.isInteger(history.warehouse_index) ? history.warehouse_index : 0;
+      const totals: Record<string, number> = { ...(history.quantities || {}) };
+      const last_request_at = new Date(now).toISOString();
+      // Save the throttle before the external call so a restart cannot violate SalesDoc's five-minute limit.
+      db.update('integrations', integrationId, { config: { ...currentConfig, stockout_history: { ...history, warehouses, date, warehouse_index: warehouseIndex, quantities: totals, last_request_at, complete: false } } });
+      const snapshot = await adapter.importStockForDate(integration.config, date, warehouses[warehouseIndex].id);
+      for (const item of snapshot) totals[item.sku] = (totals[item.sku] || 0) + (Number(item.quantity) || 0);
+
+      let nextDate = date;
+      let nextWarehouseIndex = warehouseIndex + 1;
+      let nextTotals = totals;
+      let complete = false;
+      let resolved = 0;
+      if (nextWarehouseIndex >= warehouses.length) {
+        const rows: Product[] = [];
+        for (const product of unresolved()) {
+          const quantity = totals[String(product.sku)] || 0;
+          if (quantity > 0) {
+            rows.push({ ...product, stockout_started_at: addDays(date, 1), updated_at: new Date(now).toISOString() });
+            resolved++;
+          }
+        }
+        if (rows.length) db.upsertMany('products', rows);
+        nextDate = addDays(date, -1);
+        nextWarehouseIndex = 0;
+        nextTotals = {};
+        complete = unresolved().length === 0 || nextDate < start;
+      }
+      const nextHistory = {
+        ...history, start_date: start, warehouses, date: nextDate, warehouse_index: nextWarehouseIndex,
+        quantities: nextTotals, last_request_at, complete,
+        finished_at: complete ? new Date(now).toISOString() : null,
+        last_error: null
+      };
+      db.update('integrations', integrationId, { config: { ...db.findById('integrations', integrationId)!.config, stockout_history: nextHistory } });
+      return { skipped: false, date, warehouse: warehouses[warehouseIndex].name, resolved, complete, unresolved: unresolved().length };
+    } catch (err: any) {
+      const latest = db.findById('integrations', integrationId)!;
+      const stockout_history = { ...(latest.config?.stockout_history || history), last_request_at: new Date(now).toISOString(), last_error: String(err?.message || err) };
+      db.update('integrations', integrationId, { config: { ...latest.config, stockout_history } });
+      console.warn('[SalesDocHistory] tarixiy ombor qoldig‘i:', err.message);
+      return { skipped: false, error: String(err?.message || err) };
+    } finally {
+      this.stockHistoryRunning.delete(integrationId);
+    }
+  }
 
   /** Asks a running download to stop after the request in flight; months already saved stay. */
   static stop(integrationId: string): boolean {
@@ -237,8 +320,21 @@ export class SalesDocHistoryService {
     try {
       return await adapter.importOrders(config, { dateFrom: from, dateTo: to, status: [1, 2, 3, 4, 5], withItems });
     } catch (err: any) {
-      if (from === to || !/takrorladi|uzilib|chegara/i.test(err.message)) throw new Error(`${from}–${to}: ${err.message}`);
+      const transientGateway = /HTTP 502|HTTP 503|HTTP 504|Bad Gateway|gateway timeout/i.test(err.message);
+      if (transientGateway || /tarmoq xatosi|vaqti tugadi/i.test(err.message)) {
+        // GET history pages are safe to retry. A shorter range after transient gateway failures
+        // also keeps a large month from repeatedly overwhelming the provider.
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await new Promise(resolve => setTimeout(resolve, 1200 * (attempt + 1)));
+          try { return await adapter.importOrders(config, { dateFrom: from, dateTo: to, status: [1, 2, 3, 4, 5], withItems }); }
+          catch (retryError: any) { err = retryError; }
+        }
+      }
       const span = Math.round((Date.parse(to) - Date.parse(from)) / 86400000);
+      // A persistent gateway outage is not a bad date range. Splitting a month into
+      // daily requests would multiply load on an unavailable service, so keep this
+      // chunk resumable and retry it during the next scheduled/manual run.
+      if (transientGateway || from === to || !/takrorladi|uzilib|chegara|tarmoq xatosi|vaqti tugadi/i.test(err.message)) throw new Error(`${from}–${to}: ${err.message}`);
       const mid = addDays(from, Math.floor(span / 2));
       const left = await this.fetchRange(adapter, config, from, mid, withItems);
       const right = await this.fetchRange(adapter, config, addDays(mid, 1), to, withItems);
@@ -256,11 +352,13 @@ export class SalesDocHistoryService {
       const existing = db.find('products', p => p.company_id === companyId && (!p.source_integration_id || p.source_integration_id === integrationId));
       const bySku = new Map(existing.map(p => [p.sku, p]));
       const rows: Product[] = [];
+      let newStockoutDetected = false;
       for (const p of existing) {
         if (p.source === source && (!p.source_integration_id || p.source_integration_id === integrationId) && !liveCodes.has(p.sku)) rows.push({ ...p, is_active: false });
       }
       for (const p of products) {
         const old = bySku.get(String(p.sku));
+        if ((Number(p.stock_quantity) || 0) <= 0 && (!old || (Number(old.stock_quantity) || 0) > 0)) newStockoutDetected = true;
         const price = p.selling_price || old?.selling_price || 0;
         rows.push({
           ...(old || { id: randomUUID(), created_at: now, selling_price: 0, stock_quantity: 0 }),
@@ -277,12 +375,28 @@ export class SalesDocHistoryService {
           current_cost: isPlausibleCost(p.purchase_cost, price) ? p.purchase_cost : (old && isPlausibleCost(old.current_cost, price) ? old.current_cost : p.purchase_cost || 0),
           daily_sales_avg: old?.daily_sales_avg ?? 0,
           ...inventoryObservation(old || { stock_quantity: 0 }, Number(p.stock_quantity) || 0, businessToday()),
+          // A new zero after a previously positive stock state needs fresh historical verification.
+          stockout_started_at: Number(p.stock_quantity) > 0 ? null : ((Number(old?.stock_quantity) || 0) <= 0 ? old?.stockout_started_at ?? null : null),
           // Keep the last positive inventory sighting; it is evidence of availability, not an exact depletion date.
           last_in_stock_at: Number(p.stock_quantity) > 0 ? businessToday() : old?.last_in_stock_at ?? null,
           sku: String(p.sku), company_id: companyId, source, is_active: true, updated_at: now, source_integration_id: integrationId
         } as Product);
       }
       db.upsertMany('products', rows);
+      if (adapter instanceof SalesDocAdapter && newStockoutDetected) {
+        const integration = db.findById('integrations', integrationId);
+        if (integration) db.update('integrations', integrationId, {
+          config: {
+            ...integration.config,
+            stockout_history: {
+              ...(integration.config.stockout_history || {}),
+              start_date: isValidIsoDate(config.history_start_date) ? config.history_start_date : null,
+              date: addDays(businessToday(), -1), warehouse_index: 0, quantities: {},
+              last_request_at: null, complete: false, finished_at: null, last_error: null
+            }
+          }
+        });
+      }
     });
   }
 
@@ -300,19 +414,59 @@ export class SalesDocHistoryService {
     try { cards = await adapter.importCustomers(config); } catch (err: any) { console.warn('[SalesDocHistory] mijozlar kartasi:', err.message); return { updated: 0, skipped: false }; }
     const byCode = new Map(db.find('customers', c => c.company_id === companyId && !!c.code && (!c.source_integration_id || c.source_integration_id === integrationId)).map(c => [canonicalCustomerCode(c.code), c]));
     let updated = 0;
+    const nowIso = new Date(now).toISOString();
+    const customerRows: Customer[] = [];
+    const balanceRows: CustomerBalanceTransaction[] = [];
     for (const card of cards) {
-      const c = byCode.get(canonicalCustomerCode(card.externalCode));
-      if (!c) continue;
+      let c = byCode.get(canonicalCustomerCode(card.externalCode));
+      if (!c) {
+        c = { id: randomUUID(), company_id: companyId, code: card.externalCode, name: card.name || card.externalCode, phone: card.phone || '', address: card.address || '', credit_limit: 0, credit_limit_enabled: false, current_balance: 0, status: 'ACTIVE', is_active: card.isActive !== false, created_at: nowIso, source_integration_id: integrationId } as Customer;
+        byCode.set(canonicalCustomerCode(card.externalCode), c);
+      }
       const patch: Partial<Customer> = {};
       const territory_id = territoryIdFor(companyId, card.territory);
       if (territory_id && territory_id !== c.territory_id) patch.territory_id = territory_id;
       if (card.phone && !c.phone) patch.phone = card.phone;
       if (card.address && !c.address) patch.address = card.address;
-      if (Object.keys(patch).length) { db.update('customers', c.id, patch); updated++; }
+      if (card.isActive !== undefined && card.isActive !== c.is_active) patch.is_active = card.isActive;
+      const customer = { ...c, ...patch, source_integration_id: integrationId, updated_at: nowIso } as Customer;
+      customerRows.push(customer);
+
+      // getBalance is the authoritative current snapshot. Balance reports read the transaction ledger,
+      // so reconcile one stable snapshot row instead of only changing the cached customer column.
+      const remoteBalance = Number(card.balance);
+      if (Number.isFinite(remoteBalance)) {
+        const externalId = `${integrationId}:balance-snapshot:${customer.id}`;
+        const ledger = db.find('customer_balance_transactions', t => t.company_id === companyId && t.customer_id === customer.id && t.status !== 'REVERSED' && t.external_id !== externalId);
+        const baseBalance = ledger.reduce((sum, t) => sum + (t.transaction_type === 'DEBIT' ? Number(t.amount) || 0 : -(Number(t.amount) || 0)), 0);
+        const delta = Math.round(remoteBalance - baseBalance);
+        const existing = db.find('customer_balance_transactions', t => t.company_id === companyId && t.source_integration_id === integrationId && t.external_id === externalId)[0];
+        if (delta === 0) {
+          if (existing && existing.status !== 'REVERSED') balanceRows.push({ ...existing, amount: 0, debit_amount: 0, credit_amount: 0, status: 'REVERSED', balance_after: remoteBalance, updated_at: nowIso });
+        } else {
+          const debit = delta > 0;
+          balanceRows.push({
+            ...(existing || { id: `${integrationId}:balance:${customer.id}`, created_at: nowIso }),
+            company_id: companyId, customer_id: customer.id, transaction_type: debit ? 'DEBIT' : 'CREDIT',
+            ledger_type: debit ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT', debit_amount: debit ? delta : 0,
+            credit_amount: debit ? 0 : -delta, amount: Math.abs(delta), currency: 'UZS', balance_after: remoteBalance,
+            reference_type: 'ADJUSTMENT', reference_id: externalId, external_id: externalId, source_system: 'SALESDOC',
+            comment: 'SalesDoctor joriy balansiga moslashtirish', date: businessToday(), transaction_date: businessToday(),
+            status: 'CONFIRMED', created_by: 'salesdoc-sync', created_at: existing?.created_at || nowIso,
+            updated_at: nowIso, source_integration_id: integrationId
+          } as CustomerBalanceTransaction);
+        }
+        customer.current_balance = Math.round(remoteBalance);
+      }
+      if (Object.keys(patch).length || !c.source_integration_id) updated++;
     }
+    db.transaction(() => {
+      if (customerRows.length) db.upsertMany('customers', customerRows);
+      if (balanceRows.length) db.upsertMany('customer_balance_transactions', balanceRows);
+    });
     const current = db.findById('integrations', integrationId)!;
     db.update('integrations', integrationId, { config: { ...current.config, customers_synced_at: new Date(now).toISOString(), customers_cards_version: CARDS_VERSION } });
-    if (updated) console.log(`[SalesDocHistory] mijoz kartalari yangilandi: ${updated} ta (hudud, telefon, manzil)`);
+    if (updated || balanceRows.length) console.log(`[SalesDocHistory] mijozlar yangilandi: ${updated} ta, balans moslashtirildi: ${balanceRows.length} ta`);
     return { updated, skipped: false };
   }
 

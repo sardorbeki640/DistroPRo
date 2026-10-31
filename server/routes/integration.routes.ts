@@ -215,6 +215,9 @@ router.get('/config/:provider', requireAuth, requirePermission('integration', 'v
         has_token: Boolean(cfg.api_token),
         has_password: Boolean(cfg.password),
         history_start_date: cfg.history_start_date || '',
+        order_date_field: cfg.order_date_field === 'dateLoad' ? 'dateLoad' : 'date',
+        payment_cash_id: configuredPaymentId(cfg.payment_types?.CASH),
+        payment_terminal_id: configuredPaymentId(cfg.payment_types?.TERMINAL),
         forecast_days: cfg.forecast_days || 100,
         sale_price_type_id: cfg.sale_price_type_id || '',
         sale_price_type_ids: cfg.sale_price_type_ids || (cfg.sale_price_type_id ? [cfg.sale_price_type_id] : []),
@@ -279,7 +282,7 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
       forecast_days:forecastDays,
       order_date_field:req.body.order_date_field==='dateLoad'?'dateLoad':'date',
       // Cash and old-debt payments go to the cash type; terminal and Click to the card type.
-      payment_types:{...existing?.config.payment_types,...(req.body.payment_cash_id?{CASH:configuredPaymentRef(upperProvider, String(req.body.payment_cash_id)),OLD_DEBT:configuredPaymentRef(upperProvider, String(req.body.payment_cash_id))}:{}),...(req.body.payment_terminal_id?{TERMINAL:configuredPaymentRef(upperProvider, String(req.body.payment_terminal_id)),CLICK:configuredPaymentRef(upperProvider, String(req.body.payment_terminal_id))}:{})},
+      payment_types:{...existing?.config.payment_types},
       // Which SalesDoc price type is the selling price and which the purchase cost ('' = detected automatically).
       ...(req.body.sale_price_type_id !== undefined ? { sale_price_type_id: String(req.body.sale_price_type_id || '') } : {}),
       ...(req.body.sale_price_type_ids !== undefined ? { sale_price_type_ids: Array.isArray(req.body.sale_price_type_ids) ? req.body.sale_price_type_ids.map(String).filter(Boolean) : [] } : {}),
@@ -292,6 +295,24 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
       sync_interval: sync_interval || '1h',
       auto_sync: auto_sync !== false
     };
+    // These fields are always present in the settings form. An empty value clears
+    // the old selection; a non-empty value replaces it on the very same record.
+    if (req.body.payment_cash_id !== undefined) {
+      delete configPayload.payment_types.CASH;
+      delete configPayload.payment_types.OLD_DEBT;
+      if (String(req.body.payment_cash_id)) {
+        configPayload.payment_types.CASH = configuredPaymentRef(upperProvider, String(req.body.payment_cash_id));
+        configPayload.payment_types.OLD_DEBT = configuredPaymentRef(upperProvider, String(req.body.payment_cash_id));
+      }
+    }
+    if (req.body.payment_terminal_id !== undefined) {
+      delete configPayload.payment_types.TERMINAL;
+      delete configPayload.payment_types.CLICK;
+      if (String(req.body.payment_terminal_id)) {
+        configPayload.payment_types.TERMINAL = configuredPaymentRef(upperProvider, String(req.body.payment_terminal_id));
+        configPayload.payment_types.CLICK = configuredPaymentRef(upperProvider, String(req.body.payment_terminal_id));
+      }
+    }
     delete configPayload.uy_oplata_mode;
     if (configPayload.payment_types) delete configPayload.payment_types.HOME;
 
@@ -535,13 +556,23 @@ router.get('/:provider/history-status', requireAuth, requirePermission('integrat
     const integration = d?.integration;
     if (!integration) { res.json({ success: true, configured: false, history: null }); return; }
     const history = SalesDocHistoryService.getState(integration.id);
+    const configuredStockHistory = integration.config?.stockout_history;
+    const canReadHistoricalStock = d!.capabilities.historicalStock && isValidIsoDate(integration.config?.history_start_date);
+    const stockHistory = configuredStockHistory || (canReadHistoricalStock ? { date: null, complete: false, last_error: null, last_request_at: null, finished_at: null, warehouse_index: 0, warehouses: [] } : null);
     res.json({
       success: true,
       configured: true,
       system: d!.name,
       running: SalesDocHistoryService.isRunning(integration.id),
       // A RUNNING state without a live job means the server stopped mid-download; the next run resumes it.
-      history: history ? { ...history, chunks: undefined, months: Object.keys(history.chunks || {}).length } : null
+      history: history ? { ...history, chunks: undefined, months: Object.keys(history.chunks || {}).length } : null,
+      stockout_history: stockHistory ? {
+        date: stockHistory.date || null, complete: stockHistory.complete === true,
+        last_error: stockHistory.last_error || null, last_request_at: stockHistory.last_request_at || null,
+        finished_at: stockHistory.finished_at || null, warehouse_index: stockHistory.warehouse_index || 0,
+        warehouse_count: Array.isArray(stockHistory.warehouses) ? stockHistory.warehouses.length : 0,
+        unresolved_count: db.find('products', p => p.company_id === companyId && p.source_integration_id === integration.id && p.is_active && (Number(p.stock_quantity) || 0) <= 0 && !p.stockout_started_at).length
+      } : null
     });
   } catch (err) {
     next(err);

@@ -47,7 +47,7 @@ export function requireDistribution(company_id: string, need?: keyof Distributio
   const d = activeDistribution(company_id);
   if (!d) throw new Error('Distribyutor tizimi (SalesDoctor, Linko …) ulanmagan yoki o‘chirilgan. Integratsiyalar bo‘limida ulang.');
   if (need && !d.capabilities[need]) {
-    const what = { payments: 'kassadan to‘lov yuborish', visits: 'agent vizitlarini berish', priceTypes: 'narx turlarini berish', paymentTypes: 'to‘lov turlarini berish', history: 'buyurtmalar tarixini berish' }[need];
+    const what = { payments: 'kassadan to‘lov yuborish', visits: 'agent vizitlarini berish', priceTypes: 'narx turlarini berish', paymentTypes: 'to‘lov turlarini berish', history: 'buyurtmalar tarixini berish', historicalStock: 'tarixiy ombor qoldig‘ini berish' }[need];
     throw new Error(`${d.name} bilan ${what} hali qo‘llab-quvvatlanmaydi.`);
   }
   return d;

@@ -205,6 +205,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
 
   // Order history of the active distribution system (whichever gives its history; a switched-on one first): coverage and live progress.
   const [history, setHistory] = useState<any>(null);
+  const [stockoutHistory, setStockoutHistory] = useState<any>(null);
   const [historyRunning, setHistoryRunning] = useState(false);
   const [historyPoll, setHistoryPoll] = useState(false);
   const withHistory = integrations.filter(i => i.capabilities?.history);
@@ -215,27 +216,31 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
     || withHistory[0];
   const historyProvider: string | null = historyRecord?.provider_name.toUpperCase() || null;
   const historyName = historyRecord?.system_name || historyProvider || '';
-  const loadHistory = async (): Promise<boolean> => {
+  const loadHistory = async (): Promise<boolean | null> => {
     if (!historyProvider) return false;
     try {
       const r = await api.getSalesDocHistoryStatus(historyProvider, historyRecord?.id);
       setHistory(r.history);
+      setStockoutHistory(r.stockout_history || null);
       setHistoryRunning(!!r.running);
-      return !!r.running;
+      const stockHistoryRunning = !!r.stockout_history && !r.stockout_history.complete && Number(r.stockout_history.unresolved_count) > 0;
+      return !!r.running || stockHistoryRunning;
     } catch {
-      return false;
+      // A transient 502 must not stop polling while the server continues its background import.
+      return null;
     }
   };
   useEffect(() => {
     setHistory(null);
-    loadHistory().then(running => { if (running) setHistoryPoll(true); });
+    setStockoutHistory(null);
+    loadHistory().then(running => { if (running !== false) setHistoryPoll(true); });
   }, [historyProvider, historyRecord?.id]);
   useEffect(() => {
     if (!historyPoll) return;
     const timer = setInterval(async () => {
       const running = await loadHistory();
-      if (!running) { setHistoryPoll(false); fetchIntegrations(); }
-    }, 4000);
+      if (running === false) { setHistoryPoll(false); fetchIntegrations(); }
+    }, 15000);
     return () => clearInterval(timer);
   }, [historyPoll, historyProvider, historyRecord?.id]);
 
@@ -601,6 +606,15 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
                   Birinchi buyurtma: {history.first_order || '—'} · O‘tkazib yuborilgan (mijoz yoki sanasi yo‘q): {history.skipped || 0}
                   {history.ledger_synced_to && ` · Qarz/to‘lov daftari: ${history.ledger_synced_to} gacha`}
                   {history.synced_at && ` · Oxirgi yuklash: ${new Date(history.synced_at).toLocaleString('uz-UZ')}`}
+                </p>
+              )}
+              {stockoutHistory && historyRecord?.capabilities?.historicalStock && (
+                <p className={stockoutHistory.last_error ? 'font-semibold text-red-700' : 'text-neutral-600'}>
+                  {stockoutHistory.last_error
+                    ? `Tarixiy ombor qoldig‘i olinmadi: ${stockoutHistory.last_error}`
+                    : stockoutHistory.complete
+                      ? `Qoldiq tugagan sanalar tarixdan tekshirildi · sanasi topilmagan: ${stockoutHistory.unresolved_count || 0} ta mahsulot`
+                      : `Qoldiq tugagan sanalar SalesDoctor tarixidan olinmoqda · tekshirilayotgan kun: ${stockoutHistory.date || 'boshlanmoqda'} · omborlar: ${stockoutHistory.warehouse_count || 0} ta`}
                 </p>
               )}
             </div>

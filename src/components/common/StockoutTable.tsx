@@ -55,7 +55,7 @@ const estimateLabel = (i: OutOfStockLostProfitItem) => ({
     title: 'Tugagan mahsulotlar va boy berilgan savdo',
     columns: [
       { header: 'Mahsulot', key: 'name', width: 34 }, { header: 'SKU', key: 'sku', width: 12 }, { header: 'Kategoriya', key: 'category', width: 22 },
-      { header: '0 qoldiq birinchi tasdiqlangan sana', key: 'out_of_stock_since', type: 'date' }, { header: '0 qoldiq tasdiqlanganidan o‘tgan kun', key: 'days_out_of_stock', type: 'number' },
+      { header: 'Qoldiq sanasi', key: 'out_of_stock_since', type: 'date' }, { header: 'Sanadan o‘tgan kun', key: 'days_out_of_stock', type: 'number' },
       { header: 'Oxirgi ombor tekshiruvi', key: 'stock_observed_at', type: 'date' }, { header: 'Hisob holati', key: 'estimate_status', width: 24 },
       { header: 'Oxirgi sotuv', key: 'last_sale_date', type: 'date' }, { header: 'Kunlik o‘rtacha sotuv', key: 'daily_sales_avg', type: 'number' },
       { header: 'Sotilmagan miqdor', key: 'lost_units', type: 'number', total: true }, { header: 'Boy berilgan sotuv', key: 'lost_sales_uzs', type: 'money', total: true },
@@ -112,7 +112,7 @@ const estimateLabel = (i: OutOfStockLostProfitItem) => ({
                 <td className="px-3 py-2.5 text-center">
                   <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-extrabold ${i.days_out_of_stock === null ? 'bg-neutral-100 text-neutral-600' : 'bg-rose-100 text-rose-900'}`}>
                     {i.days_out_of_stock !== null && i.out_of_stock_since
-                      ? `0 qoldiq ${i.days_out_of_stock === 0 ? 'bugun' : `${i.days_out_of_stock} kun`} · ${i.out_of_stock_since.split('-').reverse().join('.')}`
+                      ? `${i.stockout_date_accuracy === 'HISTORICAL' ? `Qoldiq ${i.days_out_of_stock === 0 ? 'bugun tugagan' : `${i.days_out_of_stock} kun oldin tugagan`}` : `0 qoldiq ${i.days_out_of_stock} kun qayd etilgan`} · ${i.out_of_stock_since.split('-').reverse().join('.')}`
                       : stockOutLabel(i)}
                   </span>
                   {i.stock_observed_at && <div className="mt-0.5 text-[10px] text-neutral-400">Oxirgi tekshiruv: {i.stock_observed_at.split('-').reverse().join('.')}</div>}

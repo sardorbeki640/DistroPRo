@@ -181,7 +181,7 @@ export type MyTelegram = {
   reminders: { type: string; label: string; hint: string; muted: boolean }[];
 };
 
-export type DistributionSystem = { id: string; provider: string; name: string; capabilities: { payments: boolean; visits: boolean; priceTypes: boolean; paymentTypes: boolean; history: boolean }; last_sync_at?: string | null };
+export type DistributionSystem = { id: string; provider: string; name: string; capabilities: { payments: boolean; visits: boolean; priceTypes: boolean; paymentTypes: boolean; history: boolean; historicalStock?: boolean }; last_sync_at?: string | null };
 export type JarvisItem ={ role: 'user' | 'assistant' | 'tool'; text: string; status?: string };
 export type JarvisConversationView = { id: string; title: string; items: JarvisItem[]; client_actions?: { type: 'navigate'; page: string }[] };
 export type JarvisInsight = { id: string; level: 'critical' | 'warning' | 'info'; title: string; detail: string; page?: string };
@@ -235,7 +235,7 @@ export const api = {
   verifyCashCancellations: (id: string): Promise<{ cancelled: number; still: string[]; message: string }> => fetchApi('/api/cash/days/' + id + '/verify-cancellations', { method: 'POST' }),
   refreshCashOrders: (id:string):Promise<any> => fetchApi('/api/cash/days/'+id+'/sync-orders',{method:'POST'}),
   getExchangeRate: (date?: string): Promise<{ rate: number | null; date: string; error?: string }> => fetchApi('/api/cash/exchange-rate' + (date ? '?date=' + encodeURIComponent(date) : '')),
-  getSalesDocHistoryStatus: (provider?: string, integrationId?: string): Promise<{ configured: boolean; running?: boolean; history: any; system?: string }> => fetchApi(`/api/integrations/${encodeURIComponent(provider || 'active')}/history-status${integrationId ? `?integration_id=${encodeURIComponent(integrationId)}` : ''}`),
+  getSalesDocHistoryStatus: (provider?: string, integrationId?: string): Promise<{ configured: boolean; running?: boolean; history: any; stockout_history?: any; system?: string }> => fetchApi(`/api/integrations/${encodeURIComponent(provider || 'active')}/history-status${integrationId ? `?integration_id=${encodeURIComponent(integrationId)}` : ''}`),
   /** The connected distribution system (any: SalesDoctor, Linko, …): its name and what it can do. */
   getActiveDistribution: (): Promise<{ active: DistributionSystem | null; systems: (DistributionSystem & { status: string; disabled: boolean })[] }> => fetchApi('/api/integrations/active'),
   getSalesDocPriceTypes: (provider = 'active', integrationId?: string): Promise<{ system?: string; priceTypes: { id: string; name: string; kind: 'sale' | 'purchase'; active: boolean; currency?: string | null }[]; selected: { sale: string[]; purchase: string }; used: { sale: string | null; purchase: string | null } }> => fetchApi(`/api/integrations/${encodeURIComponent(provider)}/price-types${integrationId ? `?integration_id=${encodeURIComponent(integrationId)}` : ''}`),
