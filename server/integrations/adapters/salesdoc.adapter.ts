@@ -188,6 +188,25 @@ export class SalesDocAdapter implements IntegrationAdapter {
         };
       }
 
+      // A few SalesDoc endpoints return HTTP 200 with status=false but omit the
+      // documented `error` object. Preserve the provider's message instead of
+      // collapsing these responses into an unhelpful generic error.
+      if (data?.status === false && !data?.error) {
+        const message = [data?.message, data?.result?.message, data?.result?.error, data?.data?.message]
+          .find(value => typeof value === 'string' && value.trim());
+        const details = data?.result?.data ?? data?.data ?? data?.result ?? undefined;
+        return {
+          ...data,
+          status: false,
+          transport: response.status >= 500,
+          error: {
+            code: Number(data?.code || response.status) || response.status,
+            message: message || 'SalesDoctor status=false javobini qaytardi (error.message yo‘q)',
+            data: details
+          }
+        };
+      }
+
       return data;
     } catch (err: any) {
       clearTimeout(timer);
