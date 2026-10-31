@@ -112,7 +112,7 @@ const estimateLabel = (i: OutOfStockLostProfitItem) => ({
                 <td className="px-3 py-2.5 text-center">
                   <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-extrabold ${i.days_out_of_stock === null ? 'bg-neutral-100 text-neutral-600' : 'bg-rose-100 text-rose-900'}`}>
                     {i.days_out_of_stock !== null && i.out_of_stock_since
-                      ? `${i.stockout_date_accuracy === 'HISTORICAL' ? `Qoldiq ${i.days_out_of_stock === 0 ? 'bugun tugagan' : `${i.days_out_of_stock} kun oldin tugagan`}` : `0 qoldiq ${i.days_out_of_stock} kun qayd etilgan`} · ${i.out_of_stock_since.split('-').reverse().join('.')}`
+                      ? `${i.stockout_date_accuracy === 'HISTORICAL' ? `Qoldiq ${i.days_out_of_stock === 0 ? 'bugun tugagan' : `${i.days_out_of_stock} kun oldin tugagan`}` : `0 qoldiq kamida ${i.days_out_of_stock} kundan beri kuzatilgan`} · ${i.out_of_stock_since.split('-').reverse().join('.')}`
                       : stockOutLabel(i)}
                   </span>
                   {i.stock_observed_at && <div className="mt-0.5 text-[10px] text-neutral-400">Oxirgi tekshiruv: {i.stock_observed_at.split('-').reverse().join('.')}</div>}

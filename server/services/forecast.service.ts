@@ -258,10 +258,11 @@ export class ForecastService {
   /**
    * Evaluates Stock-Out items, days missing, lost sales, and lost net profit
    */
-  /** First verified zero-stock snapshot. Legacy rows fall back to their latest known inventory snapshot. */
+  /** Prefer the provider-confirmed depletion date; otherwise show when zero stock was first observed. */
   public static outOfStockSince(p: Pick<Product, 'zero_stock_observed_at' | 'stock_observed_at' | 'stockout_started_at' | 'source'>): string | null {
-    // SalesDoc has a dated stock endpoint: never call a first-seen-zero observation the actual depletion date.
-    const since = p.stockout_started_at || (p.source === 'SALESDOC' ? null : p.zero_stock_observed_at || p.stock_observed_at);
+    // The observation date is a reliable lower bound, not the physical depletion date. Keep it visible
+    // while SalesDoc's restricted historical snapshots are still being fetched.
+    const since = p.stockout_started_at || p.zero_stock_observed_at || (p.source === 'SALESDOC' ? null : p.stock_observed_at);
     return isValidIsoDate(since) && since <= businessToday() ? since : null;
   }
 
