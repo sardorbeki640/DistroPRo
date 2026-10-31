@@ -59,7 +59,7 @@ const OLDEST_MONTH = '2010-01';
 
 const monthKey = (date: string) => date.slice(0, 7);
 // Raise when customer cards must be read again right away (e.g. the territory field changed).
-const CARDS_VERSION = 3;
+const CARDS_VERSION = 4;
 const AGENT_MAPPING_VERSION = 1;
 const monthStart = (key: string) => `${key}-01`;
 function monthEnd(key: string): string {
@@ -224,6 +224,11 @@ export class SalesDocHistoryService {
         state.current = 'agentlar';
         save();
         await this.importSalesDocAgents(companyId, integrationId, adapter, config);
+        // Current balances are useful even when a long historical order import
+        // needs multiple resumptions. Do not postpone them until every month ends.
+        state.current = 'mijozlar va balanslar';
+        save();
+        await this.refreshCustomerCards(companyId, integrationId, adapter, config);
       }
       this.checkStop(integrationId);
 
@@ -454,6 +459,18 @@ export class SalesDocHistoryService {
     let cards;
     try { cards = await adapter.importCustomers(config); } catch (err: any) { console.warn('[SalesDocHistory] mijozlar kartasi:', err.message); return { updated: 0, skipped: false }; }
     const byCode = new Map(db.find('customers', c => c.company_id === companyId && !!c.code && (!c.source_integration_id || c.source_integration_id === integrationId)).map(c => [canonicalCustomerCode(c.code), c]));
+    // Read the ledgers once instead of scanning the full ledger for every customer.
+    const ledgerByCustomer = new Map<string, CustomerBalanceTransaction[]>();
+    for (const transaction of db.find('customer_balance_transactions', t => t.company_id === companyId && t.status !== 'REVERSED')) {
+      const rows = ledgerByCustomer.get(transaction.customer_id) || [];
+      rows.push(transaction);
+      ledgerByCustomer.set(transaction.customer_id, rows);
+    }
+    const snapshotPrefix = `${integrationId}:balance-snapshot:`;
+    const snapshotByCustomer = new Map<string, CustomerBalanceTransaction>();
+    for (const transaction of db.find('customer_balance_transactions', t => t.company_id === companyId && t.source_integration_id === integrationId && !!t.external_id?.startsWith(snapshotPrefix))) {
+      snapshotByCustomer.set(transaction.customer_id, transaction);
+    }
     let updated = 0;
     const nowIso = new Date(now).toISOString();
     const customerRows: Customer[] = [];
@@ -477,11 +494,11 @@ export class SalesDocHistoryService {
       // so reconcile one stable snapshot row instead of only changing the cached customer column.
       const remoteBalance = Number(card.balance);
       if (Number.isFinite(remoteBalance)) {
-        const externalId = `${integrationId}:balance-snapshot:${customer.id}`;
-        const ledger = db.find('customer_balance_transactions', t => t.company_id === companyId && t.customer_id === customer.id && t.status !== 'REVERSED' && t.external_id !== externalId);
+        const externalId = `${snapshotPrefix}${customer.id}`;
+        const ledger = (ledgerByCustomer.get(customer.id) || []).filter(t => t.external_id !== externalId);
         const baseBalance = ledger.reduce((sum, t) => sum + (t.transaction_type === 'DEBIT' ? Number(t.amount) || 0 : -(Number(t.amount) || 0)), 0);
         const delta = Math.round(remoteBalance - baseBalance);
-        const existing = db.find('customer_balance_transactions', t => t.company_id === companyId && t.source_integration_id === integrationId && t.external_id === externalId)[0];
+        const existing = snapshotByCustomer.get(customer.id);
         if (delta === 0) {
           if (existing && existing.status !== 'REVERSED') balanceRows.push({ ...existing, amount: 0, debit_amount: 0, credit_amount: 0, status: 'REVERSED', balance_after: remoteBalance, updated_at: nowIso });
         } else {
