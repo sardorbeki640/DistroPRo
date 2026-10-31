@@ -8,7 +8,7 @@ const CHECK_EVERY_MS = 60_000;
 // A history import can be large on the free Render instance. If the process
 // was restarted while importing, let the API settle before resuming the same
 // work; otherwise each restart immediately starts another expensive import.
-const INTERRUPTED_HISTORY_COOLDOWN_MS = 15 * 60_000;
+const INTERRUPTED_HISTORY_COOLDOWN_MS = 2 * 60_000;
 const lastAttempt = new Map<string, number>();
 const genericRunning = new Set<string>();
 

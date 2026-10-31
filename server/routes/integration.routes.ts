@@ -565,7 +565,7 @@ router.get('/:provider/history-status', requireAuth, requirePermission('integrat
       system: d!.name,
       running: SalesDocHistoryService.isRunning(integration.id),
       // A RUNNING state without a live job means the server stopped mid-download; the next run resumes it.
-      history: history ? { ...history, chunks: undefined, months: Object.keys(history.chunks || {}).length } : null,
+      history: history ? { ...history, chunks: undefined, range_chunks: undefined, months: Object.keys(history.chunks || {}).length } : null,
       stockout_history: stockHistory ? {
         date: stockHistory.date || null, complete: stockHistory.complete === true,
         last_error: stockHistory.last_error || null, last_request_at: stockHistory.last_request_at || null,

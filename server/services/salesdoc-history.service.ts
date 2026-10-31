@@ -37,6 +37,7 @@ export interface HistoryState {
   error: string | null;
   errors: string[];
   chunks: Record<string, HistoryChunk>;
+  range_chunks?: Record<string, HistoryChunk>;
   refetch_all?: boolean;       // re-download settled months on the next full run
   agent_mapping_version?: number;
   ledger_synced_to?: string | null; // Linko: customer ledger loaded up to this date (next runs re-read the last week)
@@ -197,7 +198,7 @@ export class SalesDocHistoryService {
       first_order: previous.first_order || null, orders: previous.orders || 0, skipped: 0,
       months_total: 0, months_done: 0, current: null, started_at: new Date().toISOString(), synced_at: previous.synced_at || null,
       error: null, errors: [], chunks: { ...(previous.chunks || {}) }, refetch_all: refetchAll,
-      agent_mapping_version: previous.agent_mapping_version
+      range_chunks: { ...(previous.range_chunks || {}) }, agent_mapping_version: previous.agent_mapping_version
     };
     const save = () => {
       const current = db.findById('integrations', integrationId)!;
@@ -254,6 +255,13 @@ export class SalesDocHistoryService {
           let stored = 0;
           let skipped = 0;
           for (const range of ranges) {
+            const rangeKey = `${month}:${range.from}:${range.to}`;
+            const savedRange = state.range_chunks?.[rangeKey];
+            if (settled && savedRange?.from === range.from && savedRange?.to === range.to) {
+              stored += savedRange.orders;
+              skipped += savedRange.skipped;
+              continue;
+            }
             this.checkStop(integrationId);
             const orders = await this.fetchRange(adapter, config, range.from, range.to, !isLinko);
             // Switched off while this range was downloading: it is not stored.
@@ -261,11 +269,15 @@ export class SalesDocHistoryService {
             const result = await this.storeOrders(companyId, userId, orders, state.errors, integrationId, true);
             stored += result.stored;
             skipped += result.skipped;
+            state.range_chunks ||= {};
+            state.range_chunks[rangeKey] = { ...range, orders: result.stored, skipped: result.skipped, synced_at: new Date().toISOString() };
+            save();
             // Keep health checks and other requests responsive between bounded
             // external reads even when a month has many weeks of data.
             await new Promise<void>(resolve => setImmediate(resolve));
           }
           state.chunks[month] = { from, to, orders: stored, skipped, synced_at: new Date().toISOString() };
+          for (const key of Object.keys(state.range_chunks || {})) if (key.startsWith(`${month}:`)) delete state.range_chunks![key];
           state.skipped += skipped;
           emptyStreak = stored ? 0 : emptyStreak + 1;
           if (stored) earliestWithOrders = month;
@@ -656,7 +668,7 @@ export class SalesDocHistoryService {
     // yield between batches so the free Render instance can answer health checks.
     let stored = 0;
     let skipped = 0;
-    const batchSize = 200;
+    const batchSize = 50;
     for (let offset = 0; offset < orders.length; offset += batchSize) {
       const result = this.storeOrdersChunk(companyId, userId, orders.slice(offset, offset + batchSize), errors, integrationId, createAgents);
       stored += result.stored;
