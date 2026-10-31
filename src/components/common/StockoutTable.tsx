@@ -110,7 +110,11 @@ const estimateLabel = (i: OutOfStockLostProfitItem) => ({
                 <td className="px-3 py-2.5"><div className="font-bold text-neutral-900">{i.name}</div><div className="font-mono text-[10px] text-neutral-400">{i.sku}{i.source ? ` · ${i.source}` : ''}</div></td>
                 <td className="px-3 py-2.5 text-neutral-600">{i.category}</td>
                 <td className="px-3 py-2.5 text-center">
-                  <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-extrabold ${i.days_out_of_stock === null ? 'bg-neutral-100 text-neutral-600' : 'bg-rose-100 text-rose-900'}`}>{stockOutLabel(i)}</span>
+                  <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-extrabold ${i.days_out_of_stock === null ? 'bg-neutral-100 text-neutral-600' : 'bg-rose-100 text-rose-900'}`}>
+                    {i.days_out_of_stock !== null && i.out_of_stock_since
+                      ? `0 qoldiq ${i.days_out_of_stock === 0 ? 'bugun' : `${i.days_out_of_stock} kun`} · ${i.out_of_stock_since.split('-').reverse().join('.')}`
+                      : stockOutLabel(i)}
+                  </span>
                   {i.stock_observed_at && <div className="mt-0.5 text-[10px] text-neutral-400">Oxirgi tekshiruv: {i.stock_observed_at.split('-').reverse().join('.')}</div>}
                 </td>
                 <td className="px-3 py-2.5 text-right font-semibold text-neutral-800">{Number((i.daily_sales_avg || 0).toFixed(2))} {i.unit || 'dona'}/kun</td>
