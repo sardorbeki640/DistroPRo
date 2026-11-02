@@ -542,7 +542,19 @@ export type PayComponent =
   | { type: 'DAILY'; rate: number; label?: string }
   | { type: 'PER_UNIT'; unit: Exclude<WorkUnit, 'DAY'>; rate: number; label?: string }
   | { type: 'PERCENT'; percent: number; base: 'OWN_SALES' | 'COMPANY_SALES' | 'OWN_DELIVERIES'; source?: 'INTEGRATION' | 'SHEETS'; agent_id?: string | null; expeditor_name?: string | null; label?: string }
-  | { type: 'KPI'; base: 'OWN_SALES'; source: 'INTEGRATION' | 'SHEETS'; target_amount: number; agent_id?: string | null; tiers: { achievement_percent: number; bonus_percent: number }[]; label?: string };
+  | { type: 'KPI'; base: 'OWN_SALES'; source: 'INTEGRATION' | 'SHEETS'; metric?: AgentKpiMetric; target_amount: number; agent_id?: string | null; integration_id?: string | null; reward_type?: AgentKpiRewardType; reward_value?: number; max_reward?: number | null; share_percent?: number; criteria?: AgentKpiCriteria; tiers: { achievement_percent: number; bonus_percent: number }[]; label?: string; comment?: string };
+
+export type AgentKpiMetric = 'SALES_AMOUNT' | 'SALES_VOLUME' | 'ORDER_COUNT' | 'SUCCESSFUL_VISITS' | 'ACTIVE_CUSTOMER_BASE' | 'TOTAL_CUSTOMER_BASE' | 'NEW_CUSTOMERS' | 'CUSTOMER_ACTIVATIONS' | 'RETURN_COUNT' | 'RETURN_AMOUNT' | 'ACTIVE_CUSTOMERS_BY_CATEGORY' | 'ACTIVE_CUSTOMERS_BY_SKU' | 'CUSTOMER_PAYMENTS';
+export type AgentKpiRewardType = 'FIXED' | 'PERCENT_OF_SALES' | 'PERCENT_OF_RECEIPTS' | 'PERCENT_OF_BASE_PAY' | 'PER_UNIT';
+export interface AgentKpiCriteria {
+  territory_ids?: string[];
+  product_categories?: string[];
+  product_brands?: string[];
+  product_ids?: string[];
+  payment_types?: string[];
+  only_new_customers?: boolean;
+  order_statuses?: ('DELIVERED' | 'PENDING')[];
+}
 
 export interface SalaryRule {
   id: string;

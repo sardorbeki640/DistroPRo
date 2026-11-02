@@ -387,7 +387,12 @@ router.get('/pay-options', requireAuth, requirePermission('employee', 'view'), (
     const agents = db.find('agents', a => a.company_id === companyId).map(a => ({ id: a.id, name: a.full_name, code: a.code, employee_id: a.employee_id || null }));
     const expeditors = new Set<string>();
     for (const o of db.find('sales_orders', o => o.company_id === companyId && !!o.expeditor_name)) expeditors.add(String(o.expeditor_name).trim());
-    res.json({ success: true, agents: agents.sort((a, b) => a.name.localeCompare(b.name)), expeditors: Array.from(expeditors).sort() });
+    const productCategories = [...new Set(db.find('products', p => p.company_id === companyId && !!p.category).map(p => p.category!))].sort();
+    const productBrands = [...new Set(db.find('products', p => p.company_id === companyId && !!p.brand).map(p => p.brand!))].sort();
+    const products = db.find('products', p => p.company_id === companyId).map(p => ({ id: p.id, sku: p.sku, name: p.name, category: p.category || '' })).sort((a, b) => a.name.localeCompare(b.name));
+    const territories = db.find('territories', t => t.company_id === companyId).map(t => ({ id: t.id, name: t.name })).sort((a, b) => a.name.localeCompare(b.name));
+    const integrations = db.find('integrations', i => i.company_id === companyId && i.status === 'CONNECTED' && !i.disabled).map(i => ({ id: i.id, name: i.provider_name }));
+    res.json({ success: true, agents: agents.sort((a, b) => a.name.localeCompare(b.name)), expeditors: Array.from(expeditors).sort(), productCategories, productBrands, products, territories, integrations });
   } catch (err) {
     next(err);
   }

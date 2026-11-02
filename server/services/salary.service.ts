@@ -15,6 +15,7 @@ import type {
 
 export const WORK_UNIT_LABEL: Record<WorkUnit, string> = { DAY: 'Ish kuni', TRIP: 'Reys', PIECE: 'Dona', HOUR: 'Soat', OTHER: 'Boshqa ish' };
 const PERCENT_BASE_LABEL = { OWN_SALES: 'O‘z savdosidan foiz', COMPANY_SALES: 'Korxona savdosidan foiz', OWN_DELIVERIES: 'Yetkazib bergan buyurtmalaridan foiz' };
+const previousMonth = (month: string) => { const [y, m] = month.split('-').map(Number); return new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7); };
 
 /** Checks and normalizes a pay scheme sent by the browser; throws an Uzbek message on the first bad part. */
 export function cleanPayComponents(raw: unknown): PayComponent[] {
@@ -49,7 +50,21 @@ export function cleanPayComponents(raw: unknown): PayComponent[] {
         const tiers = c.tiers.map((tier: any) => ({ achievement_percent: num(tier.achievement_percent, 'Reja bajarilish foizi', 1000), bonus_percent: num(tier.bonus_percent, 'KPI bonusi', 100) }))
           .sort((a: any, b: any) => a.achievement_percent - b.achievement_percent);
         if (new Set(tiers.map((x: any) => x.achievement_percent)).size !== tiers.length) throw new Error('KPI pog‘onalaridagi reja foizlari takrorlanmasin.');
-        return { type: 'KPI', base: 'OWN_SALES', source: c.source === 'SHEETS' ? 'SHEETS' : 'INTEGRATION', target_amount, tiers, agent_id: c.agent_id ? String(c.agent_id) : null, label: label(c.label) };
+        const metric = c.metric || 'SALES_AMOUNT';
+        const metrics = ['SALES_AMOUNT', 'SALES_VOLUME', 'ORDER_COUNT', 'SUCCESSFUL_VISITS', 'ACTIVE_CUSTOMER_BASE', 'TOTAL_CUSTOMER_BASE', 'NEW_CUSTOMERS', 'CUSTOMER_ACTIVATIONS', 'RETURN_COUNT', 'RETURN_AMOUNT', 'ACTIVE_CUSTOMERS_BY_CATEGORY', 'ACTIVE_CUSTOMERS_BY_SKU', 'CUSTOMER_PAYMENTS'];
+        if (!metrics.includes(metric)) throw new Error('KPI vazifasi turi tanlanmagan.');
+        const source = c.source === 'SHEETS' ? 'SHEETS' : 'INTEGRATION';
+        if (source === 'SHEETS' && metric !== 'SALES_AMOUNT') throw new Error('Google Sheets hozircha sotuv summasi KPI uchun ishlaydi. Boshqa KPI turlari ulangan tizimdan olinadi.');
+        const reward_type = ['FIXED', 'PERCENT_OF_SALES', 'PERCENT_OF_RECEIPTS', 'PERCENT_OF_BASE_PAY', 'PER_UNIT'].includes(c.reward_type) ? c.reward_type : 'PERCENT_OF_SALES';
+        const criteria = c.criteria && typeof c.criteria === 'object' ? c.criteria : {};
+        const stringList = (x: any) => Array.isArray(x) ? [...new Set(x.map(String).filter(Boolean))].slice(0, 100) : [];
+        return {
+          type: 'KPI', base: 'OWN_SALES', source, metric, target_amount, tiers, reward_type,
+          reward_value: num(c.reward_value ?? 1, 'Mukofot qiymati'), max_reward: c.max_reward == null || c.max_reward === '' ? null : num(c.max_reward, 'Mukofot yuqori chegarasi'),
+          share_percent: c.share_percent == null || c.share_percent === '' ? 100 : num(c.share_percent, 'Umumiy KPI ulushi', 100),
+          criteria: { territory_ids: stringList(criteria.territory_ids), product_categories: stringList(criteria.product_categories), product_brands: stringList(criteria.product_brands), product_ids: stringList(criteria.product_ids), payment_types: stringList(criteria.payment_types).filter((x: string) => ['CASH', 'TERMINAL', 'CLICK', 'BANK_TRANSFER', 'CREDIT', 'SPLIT'].includes(x)), order_statuses: stringList(criteria.order_statuses).filter((x: string) => x === 'DELIVERED' || x === 'PENDING') as any, only_new_customers: !!criteria.only_new_customers },
+          agent_id: c.agent_id ? String(c.agent_id) : null, integration_id: c.integration_id ? String(c.integration_id) : null, label: label(c.label), comment: label(c.comment)
+        };
       }
       default: throw new Error('Maosh qismi turi noto‘g‘ri.');
     }
@@ -155,6 +170,95 @@ export class SalaryService {
     return { base: db.find('sales_orders', o => inMonth(o) && !!o.agent_id && agentIds.has(o.agent_id)).reduce((s, o) => s + net(o), 0), label: PERCENT_BASE_LABEL.OWN_SALES };
   }
 
+  private static kpiMeasure(company_id: string, employee: Employee, c: Extract<PayComponent, { type: 'KPI' }>, month: string) {
+    const agentIds = new Set(c.agent_id ? [c.agent_id] : db.find('agents', a => a.company_id === company_id && a.employee_id === employee.id).map(a => a.id));
+    const criteria = c.criteria || {};
+    const statuses = new Set(criteria.order_statuses?.length ? criteria.order_statuses : ['DELIVERED']);
+    const customerById = new Map(db.find('customers', x => x.company_id === company_id).map(x => [x.id, x]));
+    const selectedCategories = new Set(criteria.product_categories || []);
+    const selectedProducts = new Set(criteria.product_ids || []);
+    const selectedBrands = new Set(criteria.product_brands || []);
+    const companyOrders = db.find('sales_orders', o => o.company_id === company_id);
+    const companyOrderIds = new Set(companyOrders.map(o => o.id));
+    const allItems = db.find('sales_order_items', i => companyOrderIds.has(i.sales_order_id));
+    const itemsByOrder = new Map<string, typeof allItems>();
+    for (const item of allItems) { const list = itemsByOrder.get(item.sales_order_id) || []; list.push(item); itemsByOrder.set(item.sales_order_id, list); }
+    const productById = new Map(db.find('products', x => x.company_id === company_id).map(x => [x.id, x]));
+    const matchesProduct = (item: any) => {
+      if (selectedProducts.size && !selectedProducts.has(item.product_id) && !selectedProducts.has(item.sku || '')) return false;
+      if (selectedCategories.size && !selectedCategories.has(productById.get(item.product_id)?.category || '')) return false;
+      if (selectedBrands.size && !selectedBrands.has(productById.get(item.product_id)?.brand || '')) return false;
+      return true;
+    };
+    const currentOrders = companyOrders.filter(o => String(o.order_date).startsWith(month) && statuses.has(o.status as any) && (!c.integration_id || o.source_integration_id === c.integration_id) && !!o.agent_id && agentIds.has(o.agent_id));
+    const filtered = currentOrders.filter(o => {
+      const customer = customerById.get(o.customer_id);
+      if (criteria.territory_ids?.length && !criteria.territory_ids.includes(o.territory_id || customer?.territory_id || '')) return false;
+      if (criteria.payment_types?.length && !criteria.payment_types.includes(o.payment_type)) return false;
+      if (criteria.only_new_customers && !String(customer?.created_at || '').startsWith(month)) return false;
+      const hasProductFilter = selectedCategories.size || selectedProducts.size || selectedBrands.size;
+      return !hasProductFilter || (itemsByOrder.get(o.id) || []).some(matchesProduct);
+    });
+    const grossFiltered = (order: any) => {
+      const items = (itemsByOrder.get(order.id) || []).filter(matchesProduct);
+      if (!(selectedCategories.size || selectedProducts.size || selectedBrands.size)) return Number(order.net_sales ?? order.total_sales - order.discount_amount - order.return_amount) || 0;
+      const gross = Number(order.total_sales) || items.reduce((s, i) => s + (Number(i.total_amount) || 0), 0);
+      if (!gross) return 0;
+      const itemGross = items.reduce((s, i) => s + (Number(i.total_amount) || 0), 0);
+      const share = itemGross / gross;
+      return Math.max(0, itemGross - (Number(order.discount_amount || 0) + Number(order.return_amount || 0)) * share);
+    };
+    const salesAmount = filtered.reduce((s, o) => s + grossFiltered(o), 0);
+    const matchingItems = filtered.flatMap(o => (itemsByOrder.get(o.id) || []).filter(matchesProduct));
+    const customers = new Set(filtered.map(o => o.customer_id));
+    const receiptCustomerIds = new Set(db.find('customers', x => x.company_id === company_id && !!x.agent_id && agentIds.has(x.agent_id) && (!criteria.territory_ids?.length || criteria.territory_ids.includes(x.territory_id || ''))).map(x => x.id));
+    const receiptAmount = c.integration_id
+      ? db.find('customer_balance_transactions', t => t.company_id === company_id && t.date.startsWith(month) && t.source_integration_id === c.integration_id && receiptCustomerIds.has(t.customer_id) && (t.ledger_type === 'PAYMENT' || t.ledger_type === 'CREDIT_COLLECTION' || t.ledger_type === 'CASH_PAYMENT' || t.ledger_type === 'TERMINAL_PAYMENT' || t.ledger_type === 'CLICK_PAYMENT' || t.ledger_type === 'BANK_TRANSFER_PAYMENT') && t.status !== 'REVERSED' && (!criteria.payment_types?.length || criteria.payment_types.includes(String(t.payment_method || '').toUpperCase()))).reduce((s, t) => s + Number(t.credit_amount ?? t.amount ?? 0), 0)
+      : db.find('payments', p => p.company_id === company_id && p.date.startsWith(month) && receiptCustomerIds.has(p.customer_id) && (!criteria.payment_types?.length || criteria.payment_types.includes(p.payment_method))).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const kpiReturns = db.find('returns', r => {
+      if (r.company_id !== company_id || !r.date.startsWith(month) || r.status !== 'APPROVED' || !r.agent_id || !agentIds.has(r.agent_id)) return false;
+      const customer = customerById.get(r.customer_id);
+      if (criteria.territory_ids?.length && !criteria.territory_ids.includes(customer?.territory_id || '')) return false;
+      if (c.integration_id || selectedCategories.size || selectedProducts.size || selectedBrands.size) {
+        const order = r.order_id ? companyOrders.find(o => o.id === r.order_id) : undefined;
+        if (!order || (c.integration_id && order.source_integration_id !== c.integration_id)) return false;
+        if (selectedCategories.size || selectedProducts.size || selectedBrands.size) {
+          const hasMatchingItem = (itemsByOrder.get(order.id) || []).some(matchesProduct);
+          if (!hasMatchingItem) return false;
+        }
+      }
+      return true;
+    });
+    let actual = 0;
+    let label = 'Sotuv summasi';
+    switch (c.metric || 'SALES_AMOUNT') {
+      case 'SALES_AMOUNT': actual = salesAmount; label = 'Sotuv summasi'; break;
+      case 'SALES_VOLUME': actual = matchingItems.reduce((s, i) => s + (Number(i.quantity) || 0), 0); label = 'Sotuv hajmi'; break;
+      case 'ORDER_COUNT': actual = filtered.length; label = 'Sotuvlar soni'; break;
+      case 'SUCCESSFUL_VISITS': {
+        const agentFilter = (a: any) => a.company_id === company_id && a.date.startsWith(month) && agentIds.has(a.agent_id);
+        actual = db.find('agent_visit_days', agentFilter).reduce((s, v) => s + (Number(v.visits) || 0), 0); label = 'Muvaffaqiyatli vizitlar'; break;
+      }
+      case 'ACTIVE_CUSTOMER_BASE': actual = customers.size; label = 'Faol mijozlar bazasi'; break;
+      case 'TOTAL_CUSTOMER_BASE': actual = db.find('customers', x => x.company_id === company_id && !!x.agent_id && agentIds.has(x.agent_id) && (!criteria.territory_ids?.length || criteria.territory_ids.includes(x.territory_id || ''))).length; label = 'Umumiy mijozlar bazasi'; break;
+      case 'NEW_CUSTOMERS': actual = db.find('customers', x => x.company_id === company_id && String(x.created_at || '').startsWith(month) && !!x.agent_id && agentIds.has(x.agent_id) && (!criteria.territory_ids?.length || criteria.territory_ids.includes(x.territory_id || ''))).length; label = 'Yangi qo‘shilgan mijozlar (TT)'; break;
+      case 'CUSTOMER_ACTIVATIONS': {
+        const prev = new Set(companyOrders.filter(o => o.status === 'DELIVERED' && String(o.order_date).slice(0, 7) === previousMonth(month) && !!o.agent_id && agentIds.has(o.agent_id)).map(o => o.customer_id));
+        actual = [...customers].filter(id => !prev.has(id)).length; label = 'Yangi faollashgan mijozlar'; break;
+      }
+      case 'RETURN_COUNT': {
+        actual = kpiReturns.length;
+        label = 'Tasdiqlangan qaytarishlar soni'; break;
+      }
+      case 'RETURN_AMOUNT': {
+        actual = kpiReturns.reduce((s, r) => s + (Number(r.amount) || 0), 0); label = 'Tasdiqlangan qaytarish summasi'; break;
+      }
+      case 'ACTIVE_CUSTOMERS_BY_CATEGORY': case 'ACTIVE_CUSTOMERS_BY_SKU': actual = customers.size; label = c.metric === 'ACTIVE_CUSTOMERS_BY_SKU' ? 'SKU bo‘yicha faol mijozlar' : 'Kategoriya bo‘yicha faol mijozlar'; break;
+      case 'CUSTOMER_PAYMENTS': actual = receiptAmount; label = 'Mijozlardan tushgan to‘lov'; break;
+    }
+    return { actual, salesAmount, receiptAmount, label };
+  }
+
   /** Saves the pay scheme; base_salary and salary_type follow it so older screens and reports stay right. */
   public static setPayComponents(company_id: string, employee_id: string, components: PayComponent[]) {
     const monthly = components.filter(c => c.type === 'MONTHLY').reduce((s, c) => s + (c as any).amount, 0);
@@ -257,10 +361,17 @@ export class SalaryService {
       let amount: number;
       let description: string;
       if (c.type === 'KPI') {
-        const achievement = base / c.target_amount * 100;
+        const metric = this.kpiMeasure(input.company_id, employee, c, month);
+        if (c.source === 'SHEETS' && c.metric && c.metric !== 'SALES_AMOUNT') throw new Error('Sheets orqali hozircha faqat sotuv summasi KPI olinadi.');
+        const actual = c.source === 'SHEETS' ? base : metric.actual;
+        const achievement = actual / c.target_amount * 100;
         const tier = [...c.tiers].sort((a, b) => b.achievement_percent - a.achievement_percent).find(t => achievement >= t.achievement_percent);
-        amount = tier ? Math.round(base * tier.bonus_percent / 100) : 0;
-        description = `${c.label || 'Agent KPI'}: ${Math.round(base).toLocaleString('ru-RU')} / ${Math.round(c.target_amount).toLocaleString('ru-RU')} so‘m (${achievement.toFixed(1)}% reja), ${tier ? `${tier.achievement_percent}% pog‘ona · ${tier.bonus_percent}% bonus` : 'bonus pog‘onasiga yetmadi'}`;
+        const rewardValue = Number(c.reward_value || 0);
+        const rewardSales = c.source === 'SHEETS' ? base : metric.salesAmount;
+        const rewardBase = c.reward_type === 'FIXED' ? rewardValue : c.reward_type === 'PERCENT_OF_RECEIPTS' ? metric.receiptAmount * rewardValue / 100 : c.reward_type === 'PERCENT_OF_BASE_PAY' ? baseAmount * rewardValue / 100 : c.reward_type === 'PER_UNIT' ? actual * rewardValue : rewardSales * rewardValue / 100;
+        amount = tier ? Math.round(rewardBase * tier.bonus_percent / 100 * (c.share_percent ?? 100) / 100) : 0;
+        if (c.max_reward && amount > c.max_reward) amount = Math.round(c.max_reward);
+        description = `${c.label || 'Agent KPI'} · ${metric.label}: ${Math.round(actual).toLocaleString('ru-RU')} / ${Math.round(c.target_amount).toLocaleString('ru-RU')} (${achievement.toFixed(1)}% reja), ${tier ? `${tier.achievement_percent}% pog‘ona` : 'mukofot pog‘onasiga yetmadi'}${c.share_percent && c.share_percent !== 100 ? ` · umumiy KPI ulushi ${c.share_percent}%` : ''}${c.comment ? ` · ${c.comment}` : ''}`;
       } else {
         amount = Math.round(base * c.percent / 100);
         description = `${c.label || label}: ${c.percent}% × ${Math.round(base).toLocaleString('ru-RU')} so‘m`;

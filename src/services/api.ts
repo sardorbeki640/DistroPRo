@@ -948,7 +948,7 @@ export const api = {
   getWorkEntries: (month: string, employeeId?: string): Promise<{ entries: any[] }> =>
     fetchApi(`/api/salaries/work?month=${encodeURIComponent(month)}${employeeId ? `&employee_id=${encodeURIComponent(employeeId)}` : ''}`),
   deleteWorkEntry: (id: string): Promise<any> => fetchApi(`/api/salaries/work/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  getPayOptions: (): Promise<{ agents: { id: string; name: string; code: string }[]; expeditors: string[] }> => fetchApi('/api/salaries/pay-options'),
+  getPayOptions: (): Promise<{ agents: { id: string; name: string; code: string }[]; expeditors: string[]; productCategories: string[]; productBrands: string[]; products: { id: string; sku: string; name: string; category: string }[]; territories: { id: string; name: string }[]; integrations: { id: string; name: string }[] }> => fetchApi('/api/salaries/pay-options'),
   syncAgentSalesSheet: (period_month: string): Promise<{ month: string; imported_agents: number; imported_rows: number; unmatched_codes: string[]; imported_at: string }> =>
     fetchApi('/api/salaries/sheets/sync', { method: 'POST', body: JSON.stringify({ period_month }) }),
   recordPiecework: async (data: { employee_id: string; units_completed: number; rate_applied: number; date?: string }): Promise<any> => {
