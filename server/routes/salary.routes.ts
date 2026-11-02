@@ -7,6 +7,7 @@ import { AuthService } from '../services/auth.service.ts';
 import { SalaryService, cleanPayComponents } from '../services/salary.service.ts';
 import { isValidIsoDate } from '../utils/date.ts';
 import { db } from '../db/database.ts';
+import { SheetsService } from '../services/sheets.service.ts';
 
 const router = Router();
 
@@ -176,9 +177,10 @@ router.get('/', requireAuth, requirePermission('salary', 'view'), (req: Request,
 /**
  * POST /api/salaries/calculate - Preview and calculate monthly payroll
  */
-router.post('/calculate', requireAuth, requirePermission('salary', 'create'), (req: Request, res: Response, next) => {
+router.post('/calculate', requireAuth, requirePermission('salary', 'create'), async (req: Request, res: Response, next) => {
   try {
     const validated = CalculateSalarySchema.parse(req.body);
+    if (SalaryService.usesSheetSales(req.user!.companyId, [validated.employee_id])) await SheetsService.syncAgentSales(req.user!.companyId, validated.period_month);
     const result = SalaryService.calculateMonthlySalary({
       company_id: req.user!.companyId,
       employee_id: validated.employee_id,
@@ -199,9 +201,10 @@ router.post('/calculate', requireAuth, requirePermission('salary', 'create'), (r
 /**
  * POST /api/salaries/generate - Finalize and save salary record
  */
-router.post('/generate', requireAuth, requirePermission('salary', 'create'), (req: Request, res: Response, next) => {
+router.post('/generate', requireAuth, requirePermission('salary', 'create'), async (req: Request, res: Response, next) => {
   try {
     const validated = CalculateSalarySchema.parse(req.body);
+    if (SalaryService.usesSheetSales(req.user!.companyId, [validated.employee_id])) await SheetsService.syncAgentSales(req.user!.companyId, validated.period_month);
     const record = SalaryService.generateSalaryRecord({
       company_id: req.user!.companyId,
       employee_id: validated.employee_id,
@@ -221,10 +224,11 @@ router.post('/generate', requireAuth, requirePermission('salary', 'create'), (re
 });
 
 /** Generate monthly statements for several explicitly selected employees in one request. */
-router.post('/generate-bulk', requireAuth, requirePermission('salary', 'create'), (req: Request, res: Response, next) => {
+router.post('/generate-bulk', requireAuth, requirePermission('salary', 'create'), async (req: Request, res: Response, next) => {
   try {
     const validated = BulkCalculateSalarySchema.parse(req.body);
     const employeeIds = Array.from(new Set(validated.employee_ids));
+    if (SalaryService.usesSheetSales(req.user!.companyId, employeeIds)) await SheetsService.syncAgentSales(req.user!.companyId, validated.period_month);
     const results: { employee_id: string; salary?: any; error?: string; skipped?: boolean }[] = [];
     for (const employee_id of employeeIds) {
       const existing = db.findOne('salaries', s => s.company_id === req.user!.companyId && s.employee_id === employee_id && s.period_month === validated.period_month);
@@ -387,6 +391,15 @@ router.get('/pay-options', requireAuth, requirePermission('employee', 'view'), (
   } catch (err) {
     next(err);
   }
+});
+
+/** Import one month of agent sales from the protected Google Sheet for payroll KPI calculation. */
+router.post('/sheets/sync', requireAuth, requirePermission('salary', 'create'), async (req: Request, res: Response, next) => {
+  try {
+    const body = z.object({ period_month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }).parse(req.body);
+    const result = await SheetsService.syncAgentSales(req.user!.companyId, body.period_month);
+    res.json({ success: true, ...result });
+  } catch (err) { next(err); }
 });
 
 /**

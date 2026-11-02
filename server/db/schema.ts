@@ -541,7 +541,8 @@ export type PayComponent =
   | { type: 'MONTHLY'; amount: number; label?: string }
   | { type: 'DAILY'; rate: number; label?: string }
   | { type: 'PER_UNIT'; unit: Exclude<WorkUnit, 'DAY'>; rate: number; label?: string }
-  | { type: 'PERCENT'; percent: number; base: 'OWN_SALES' | 'COMPANY_SALES' | 'OWN_DELIVERIES'; agent_id?: string | null; expeditor_name?: string | null; label?: string };
+  | { type: 'PERCENT'; percent: number; base: 'OWN_SALES' | 'COMPANY_SALES' | 'OWN_DELIVERIES'; source?: 'INTEGRATION' | 'SHEETS'; agent_id?: string | null; expeditor_name?: string | null; label?: string }
+  | { type: 'KPI'; base: 'OWN_SALES'; source: 'INTEGRATION' | 'SHEETS'; target_amount: number; agent_id?: string | null; tiers: { achievement_percent: number; bonus_percent: number }[]; label?: string };
 
 export interface SalaryRule {
   id: string;
@@ -971,6 +972,17 @@ export interface AttendanceSettings {
   updated_at?: string;
 }
 
+/** Monthly sales imported from the company's protected Google Sheet for agent payroll. */
+export interface AgentSalesSheetCache {
+  id: string; // company|month|agent
+  company_id: string;
+  period_month: string;
+  agent_id: string;
+  agent_code: string;
+  sales_amount: number;
+  imported_at: string;
+}
+
 /**
  * A sales team: one distribution-system agent profile is shared by several people, each selling a set of product
  * categories. The team is defined by its categories; members name the person of each agent profile in this team.
@@ -1149,6 +1161,7 @@ export interface DatabaseSchema {
   agent_visit_days: AgentVisitDay[];
   staff_telegram: StaffTelegram[];
   sheet_rows: SheetRow[];
+  agent_sales_sheet_cache: AgentSalesSheetCache[];
   sales_teams: SalesTeam[];
   agent_strategies: AgentStrategyRecord[];
   // Rows taken out of the books by a repair (kept, never deleted): { id, table, reason, row, moved_at }

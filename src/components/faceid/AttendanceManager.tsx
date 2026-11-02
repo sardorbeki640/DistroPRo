@@ -393,13 +393,13 @@ const SheetsCard: React.FC<{ onError: (e: string) => void; onFlash: (t: string) 
   if (!v) return null;
   return (
     <div className="lg:col-span-2 space-y-2 rounded-2xl border border-emerald-200 bg-white p-4 text-xs">
-      <h3 className="text-sm font-bold">Google Sheets — ish boshlash va jarimalar avtomatik</h3>
-      <p className="text-[11px] text-neutral-500">Jadvalga o‘zi yoziladi: <b>“Davomat YYYY-MM”</b> — har xodimning har kungi ish boshlashi (Face ID, dumaloq video yoki birinchi vizit); <b>“Jarimalar”</b> — barcha sanalardagi qoidabuzarliklar (kechikish, kelmay qolish, rahbar kiritgani) bitta varaqda, shu oy yig‘indisi bilan (har 10 daqiqada). Bekor qilingan jarima ostiga “BEKOR QILINDI” qatori qo‘shiladi.</p>
+      <h3 className="text-sm font-bold">Google Sheets — davomat, jarimalar va agent KPI</h3>
+      <p className="text-[11px] text-neutral-500">Jadvalga o‘zi yoziladi: <b>“Davomat YYYY-MM”</b> — ish boshlashlar; <b>“Jarimalar”</b> — sanali jarimalar. Agent oyligini Sheets’dan hisoblash uchun shu faylda <b>Agent Savdosi</b> varag‘ini yarating: 1-qator sarlavhalari aynan <b>Sana | Agent kodi | Sotuv summasi</b>; keyingi qatorlarga har bir agent va sana uchun kunlik savdoni kiriting. Sana YYYY-MM-DD yoki Sheets sana formati, agent kodi esa dasturdagi agent kodi bilan bir xil bo‘lsin. Har oylik hisoblashda dastur shu varaqni o‘zi sinxronlaydi. Bir kunlik ko‘p buyurtmani bitta agent/sana qatoriga yig‘ib yozish mumkin.</p>
       <ol className="list-decimal space-y-0.5 rounded-xl bg-neutral-50 p-3 pl-7 text-[11px] text-neutral-600">
         <li>Google Sheets’da yangi jadval oching → <b>Kengaytmalar → Apps Script</b>.</li>
         <li>U yerdagi kodni o‘chirib, pastdagi <b>skript kodini</b> joylang va saqlang.</li>
         <li><b>Deploy → New deployment → Web app</b>: “Execute as: <b>Me</b>”, “Who has access: <b>Anyone</b>” → Deploy → ruxsat bering.</li>
-        <li>Chiqqan <b>Web app URL</b>ni (…/exec) shu yerga qo‘ying, “Yoqilgan”ni belgilab saqlang va “Sinash”ni bosing.</li>
+        <li>Chiqqan <b>Web app URL</b>ni (…/exec) shu yerga qo‘ying, “Yoqilgan”ni belgilab saqlang va “Sinash”ni bosing. Kodni keyin yangilasangiz, Deploy → Manage deployments → Edit → New version qilib qayta deploy qiling.</li>
       </ol>
       <button onClick={() => setShowScript(x => !x)} className="font-semibold text-emerald-700 hover:underline">{showScript ? 'Skript kodini yashirish' : 'Skript kodini ko‘rsatish'}</button>
       {showScript && (

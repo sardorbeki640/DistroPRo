@@ -11,16 +11,45 @@ import { businessToday } from '../utils/date.ts';
 export const SHEET_HEADER = ['Sana', 'Xodim', 'Lavozim', 'Guruh', 'Usul', 'Ish boshladi', 'Muddat', 'Kechikish, daq', 'Holat', 'Yozilgan vaqt'];
 /** A single penalties sheet: one dated row per violation, the running month total, cancellations. */
 export const PENALTY_HEADER = ['Sana', 'Xodim', 'Lavozim', 'Guruh', 'Qoidabuzarlik', 'Tafsilot', 'Jarima (so‘m yoki %)', 'Shu oy jami (so‘m yoki %)', 'Holat', 'Yozilgan vaqt'];
+export const AGENT_SALES_SHEET = 'Agent Savdosi';
 const headerOf = (sheet: string) => (sheet.startsWith('Jarimalar') ? PENALTY_HEADER : SHEET_HEADER);
 const MAX_ATTEMPTS = 10;
 const BATCH = 200;
 
 /** The Apps Script the owner pastes into Extensions → Apps Script of their sheet. */
 export function appsScript(token: string): string {
-  return `// Distro Pro → Google Sheets (davomat va jarimalar). Kengaytmalar → Apps Script ga joylang, keyin
+  return `// Distro Pro → Google Sheets (davomat, jarimalar va agent savdosi). Kengaytmalar → Apps Script ga joylang, keyin
 // Deploy → New deployment → Web app: "Execute as: Me", "Who has access: Anyone" → Deploy → URL ni dasturga kiriting.
-// Davomat oylar bo‘yicha; barcha sanali jarimalar bitta "Jarimalar" varag‘iga yoziladi.
+// Davomat oylar bo‘yicha; jarimalar "Jarimalar" varag‘iga; oylik agent savdosi "Agent Savdosi" varag‘idan olinadi.
 const TOKEN = '${token}';
+
+function doGet(e) {
+  const p = (e && e.parameter) || {};
+  if (p.action !== 'agent-sales') return reply({ ok: false, error: 'action noto‘g‘ri' });
+  if (p.token !== TOKEN) return reply({ ok: false, error: 'token noto‘g‘ri' });
+  const month = String(p.month || '');
+  if (!/^\\d{4}-(0[1-9]|1[0-2])$/.test(month)) return reply({ ok: false, error: 'oy YYYY-MM bo‘lishi kerak' });
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName('Agent Savdosi');
+  if (!sh || sh.getLastRow() < 2) return reply({ ok: false, error: 'Agent Savdosi varag‘ida ma’lumot yo‘q' });
+  const values = sh.getDataRange().getValues();
+  const header = values[0].map(function (v) { return String(v || '').trim().toLowerCase(); });
+  const dateCol = header.indexOf('sana');
+  const agentCol = header.indexOf('agent kodi');
+  const amountCol = header.indexOf('sotuv summasi');
+  if (dateCol < 0 || agentCol < 0 || amountCol < 0) return reply({ ok: false, error: '1-qator ustunlari: Sana | Agent kodi | Sotuv summasi bo‘lishi kerak' });
+  const tz = ss.getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+  const totals = {};
+  values.slice(1).forEach(function (row) {
+    const rawDate = row[dateCol];
+    const date = rawDate instanceof Date ? Utilities.formatDate(rawDate, tz, 'yyyy-MM-dd') : String(rawDate || '').trim();
+    if (date.slice(0, 7) !== month) return;
+    const code = String(row[agentCol] || '').trim();
+    const amount = Number(String(row[amountCol] || '').replace(/[ ,]/g, ''));
+    if (code && Number.isFinite(amount)) totals[code] = (totals[code] || 0) + amount;
+  });
+  return reply({ ok: true, month: month, rows: Object.keys(totals).map(function (code) { return { agent_code: code, sales_amount: totals[code] }; }) });
+}
 
 function doPost(e) {
   const body = JSON.parse(e.postData.contents || '{}');
@@ -242,6 +271,43 @@ export class SheetsService {
     if (!data) throw new Error(res.status === 404 ? 'Skript manzili topilmadi — URL ni tekshiring.' : 'Skript javobi tushunarsiz. Deploy qilishda “Who has access: Anyone” tanlanganini tekshiring.');
     if (!data.ok) throw new Error(`Skript rad etdi: ${data.error || 'noma’lum xato'}${/token/i.test(data.error || '') ? ' — skript kodini dasturdagi yangisi bilan almashtiring.' : ''}`);
     return data;
+  }
+
+  /** Imports this month's per-agent net sales from the protected Agent Savdosi tab. */
+  static async syncAgentSales(company_id: string, month: string) {
+    const sh = this.settings(company_id);
+    if (!sh?.enabled || !sh.url) throw new Error('Agentlar savdosi uchun Google Sheets ulanishini yoqing va URL ni saqlang.');
+    const url = new URL(sh.url);
+    url.searchParams.set('action', 'agent-sales');
+    url.searchParams.set('month', month);
+    url.searchParams.set('token', sh.token);
+    let response: Response;
+    try { response = await this.fetchImpl(url.toString(), { method: 'GET', redirect: 'follow', signal: AbortSignal.timeout(30000) }); }
+    catch (err: any) { throw new Error(`Sheets bilan aloqa yo‘q (${err?.name === 'TimeoutError' ? 'vaqt tugadi' : err?.message || 'tarmoq xatosi'}).`); }
+    let result: any;
+    try { result = JSON.parse(await response.text()); } catch { throw new Error('Sheets skripti JSON qaytarmadi. Yangi Apps Script kodini qo‘yib, deploymentni yangilang.'); }
+    if (!result?.ok || result.month !== month || !Array.isArray(result.rows)) throw new Error(`Sheets savdo importi bajarilmadi: ${result?.error || 'javob formati noto‘g‘ri'}. Apps Script kodini yangilang va deploymentni qayta chiqaring.`);
+    const agents = db.find('agents', a => a.company_id === company_id);
+    const byCode = new Map(agents.map(a => [String(a.code).trim().toLowerCase(), a]));
+    const importedAt = new Date().toISOString();
+    const totals = new Map<string, { agent_id: string; agent_code: string; sales_amount: number }>();
+    const unmatched: string[] = [];
+    for (const raw of result.rows) {
+      const code = String(raw.agent_code || '').trim();
+      const agent = byCode.get(code.toLowerCase());
+      const amount = Number(raw.sales_amount);
+      if (!agent) { if (code) unmatched.push(code); continue; }
+      if (!Number.isFinite(amount) || amount < 0) throw new Error(`Sheets’da ${code} agentining sotuv summasi noto‘g‘ri.`);
+      const old = totals.get(agent.id);
+      totals.set(agent.id, { agent_id: agent.id, agent_code: String(agent.code), sales_amount: (old?.sales_amount || 0) + amount });
+    }
+    // A fresh import replaces the month's cache, including zero sales, so old sheet values cannot remain.
+    db.removeWhere('agent_sales_sheet_cache', r => r.company_id === company_id && r.period_month === month);
+    for (const row of totals.values()) db.insert('agent_sales_sheet_cache', {
+      id: `${company_id}|${month}|${row.agent_id}`, company_id, period_month: month,
+      agent_id: row.agent_id, agent_code: row.agent_code, sales_amount: row.sales_amount, imported_at: importedAt
+    });
+    return { month, imported_agents: totals.size, imported_rows: result.rows.length, unmatched_codes: [...new Set(unmatched)], imported_at: importedAt };
   }
 
   /** Sends a test (creates the attendance month and one shared penalties sheet) so the owner sees it works. */

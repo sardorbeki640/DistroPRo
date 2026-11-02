@@ -64,6 +64,7 @@ const INITIAL_EMPTY_SCHEMA: DatabaseSchema = {
   agent_visit_days: [],
   staff_telegram: [],
   sheet_rows: [],
+  agent_sales_sheet_cache: [],
   sales_teams: [],
   agent_strategies: [],
   _quarantine: [],

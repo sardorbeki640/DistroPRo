@@ -37,10 +37,19 @@ export function cleanPayComponents(raw: unknown): PayComponent[] {
       case 'PERCENT': {
         if (!['OWN_SALES', 'COMPANY_SALES', 'OWN_DELIVERIES'].includes(c.base)) throw new Error('Foiz qaysi summadan olinishi tanlanmagan.');
         return {
-          type: 'PERCENT', percent: num(c.percent, 'Foiz', 100), base: c.base, label: label(c.label),
+          type: 'PERCENT', percent: num(c.percent, 'Foiz', 100), base: c.base, source: c.source === 'SHEETS' ? 'SHEETS' : 'INTEGRATION', label: label(c.label),
           agent_id: c.base === 'OWN_SALES' && c.agent_id ? String(c.agent_id) : null,
           expeditor_name: c.base === 'OWN_DELIVERIES' && c.expeditor_name ? String(c.expeditor_name).trim() : null
         };
+      }
+      case 'KPI': {
+        if (c.base !== 'OWN_SALES') throw new Error('Agent KPI faqat o‘z savdosi bo‘yicha hisoblanadi.');
+        const target_amount = num(c.target_amount, 'KPI rejasi');
+        if (!Array.isArray(c.tiers) || c.tiers.length < 1 || c.tiers.length > 12) throw new Error('KPI uchun 1–12 ta bonus pog‘onasi kiriting.');
+        const tiers = c.tiers.map((tier: any) => ({ achievement_percent: num(tier.achievement_percent, 'Reja bajarilish foizi', 1000), bonus_percent: num(tier.bonus_percent, 'KPI bonusi', 100) }))
+          .sort((a: any, b: any) => a.achievement_percent - b.achievement_percent);
+        if (new Set(tiers.map((x: any) => x.achievement_percent)).size !== tiers.length) throw new Error('KPI pog‘onalaridagi reja foizlari takrorlanmasin.');
+        return { type: 'KPI', base: 'OWN_SALES', source: c.source === 'SHEETS' ? 'SHEETS' : 'INTEGRATION', target_amount, tiers, agent_id: c.agent_id ? String(c.agent_id) : null, label: label(c.label) };
       }
       default: throw new Error('Maosh qismi turi noto‘g‘ri.');
     }
@@ -112,8 +121,20 @@ export class SalaryService {
     return list;
   }
 
+  public static usesSheetSales(company_id: string, employee_ids: string[]) {
+    return employee_ids.some(id => this.payComponentsOf(company_id, id).some(c => (c.type === 'PERCENT' || c.type === 'KPI') && c.source === 'SHEETS'));
+  }
+
   /** Delivered sales of the month the percent is taken from (net of returns). */
-  public static percentBase(company_id: string, employee: Employee, c: Extract<PayComponent, { type: 'PERCENT' }>, month: string): { base: number; label: string } {
+  public static percentBase(company_id: string, employee: Employee, c: Extract<PayComponent, { type: 'PERCENT' | 'KPI' }>, month: string): { base: number; label: string } {
+    const source = c.source || 'INTEGRATION';
+    if (source === 'SHEETS') {
+      if (c.type === 'PERCENT' && c.base !== 'OWN_SALES') throw new Error('Google Sheets savdosi agent bo‘yicha bog‘lanadi; KPI yoki agent savdosi foizini tanlang.');
+      const places = c.agent_id ? [] : TeamsService.placesOf(company_id, employee.id);
+      const agentIds = new Set(c.agent_id ? [c.agent_id] : places.length ? places.map(p => p.agent_id) : db.find('agents', a => a.company_id === company_id && a.employee_id === employee.id).map(a => a.id));
+      const rows = db.find('agent_sales_sheet_cache', r => r.company_id === company_id && r.period_month === month && agentIds.has(r.agent_id));
+      return { base: rows.reduce((s, r) => s + Math.max(0, Number(r.sales_amount) || 0), 0), label: `Sheets savdosi (${rows.length} agent yozuvi)` };
+    }
     const inMonth = (o: any) => o.company_id === company_id && o.status === 'DELIVERED' && String(o.order_date).startsWith(month);
     const net = (o: any) => Number(o.net_sales ?? ((o.total_sales || 0) - (o.return_amount || 0))) || 0;
     if (c.base === 'COMPANY_SALES') {
@@ -231,11 +252,21 @@ export class SalaryService {
     let bonusAmount = 0;
     const bonusBreakdown: { rule_id?: string; description: string; amount: number }[] = [];
     for (const c of components) {
-      if (c.type !== 'PERCENT') continue;
+      if (c.type !== 'PERCENT' && c.type !== 'KPI') continue;
       const { base, label } = this.percentBase(input.company_id, employee, c, month);
-      const amount = Math.round(base * c.percent / 100);
+      let amount: number;
+      let description: string;
+      if (c.type === 'KPI') {
+        const achievement = base / c.target_amount * 100;
+        const tier = [...c.tiers].sort((a, b) => b.achievement_percent - a.achievement_percent).find(t => achievement >= t.achievement_percent);
+        amount = tier ? Math.round(base * tier.bonus_percent / 100) : 0;
+        description = `${c.label || 'Agent KPI'}: ${Math.round(base).toLocaleString('ru-RU')} / ${Math.round(c.target_amount).toLocaleString('ru-RU')} so‘m (${achievement.toFixed(1)}% reja), ${tier ? `${tier.achievement_percent}% pog‘ona · ${tier.bonus_percent}% bonus` : 'bonus pog‘onasiga yetmadi'}`;
+      } else {
+        amount = Math.round(base * c.percent / 100);
+        description = `${c.label || label}: ${c.percent}% × ${Math.round(base).toLocaleString('ru-RU')} so‘m`;
+      }
       bonusAmount += amount;
-      bonusBreakdown.push({ description: `${c.label || label}: ${c.percent}% × ${Math.round(base).toLocaleString('ru-RU')} so‘m`, amount });
+      bonusBreakdown.push({ description: `${description}${c.source === 'SHEETS' ? ' · Sheets' : ' · ulangan tizim'}`, amount });
     }
 
     // 3. Recorded work: days (kunbay), trips, pieces, hours (ishbay) at the rate saved with each entry.

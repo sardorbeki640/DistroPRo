@@ -82,6 +82,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
   const [selectedPayrollIds, setSelectedPayrollIds] = useState<string[]>([]);
   const [calcBreakdown, setCalcBreakdown] = useState<any>(null);
   const [isCalculating, setIsCalculating] = useState<boolean>(false);
+  const [isSyncingAgentSales, setIsSyncingAgentSales] = useState(false);
 
   // Personal Cabinet State
   const [cabinetEmployee, setCabinetEmployee] = useState<any>(null);
@@ -97,6 +98,17 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
 
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  const syncAgentSales = async () => {
+    setIsSyncingAgentSales(true);
+    setActionError(null);
+    try {
+      const result = await api.syncAgentSalesSheet(currentMonth);
+      const unmatched = result.unmatched_codes?.length ? ` Topilmagan agent kodlari: ${result.unmatched_codes.join(', ')}.` : '';
+      setActionSuccess(`${currentMonth}: Sheets’dan ${result.imported_agents} agent savdosi olindi.${unmatched}`);
+    } catch (err: any) { setActionError(err.message || 'Google Sheets’dan agent savdosini olib bo‘lmadi.'); }
+    finally { setIsSyncingAgentSales(false); }
+  };
 
   const loadData = async () => {
     setIsLoading(true);
@@ -169,7 +181,8 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
       return;
     }
     const emptyPart = employeeForm.pay_components.find(c =>
-      (c.type === 'MONTHLY' && !(c.amount > 0)) || ((c.type === 'DAILY' || c.type === 'PER_UNIT') && !(c.rate > 0)) || (c.type === 'PERCENT' && !(c.percent > 0)));
+      (c.type === 'MONTHLY' && !(c.amount > 0)) || ((c.type === 'DAILY' || c.type === 'PER_UNIT') && !(c.rate > 0)) || (c.type === 'PERCENT' && !(c.percent > 0)) ||
+      (c.type === 'KPI' && (!(c.target_amount > 0) || !c.tiers.length || c.tiers.some(t => !(t.achievement_percent > 0) || !(t.bonus_percent > 0)))));
     if (emptyPart) {
       setActionError(`Maosh tarkibida summa yoki foiz kiritilmagan qism bor: ${describePayComponent(emptyPart)}`);
       return;
@@ -462,6 +475,10 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({ user }) => {
               className="text-xs font-semibold text-neutral-700 focus:outline-hidden"
             />
           </div>
+
+          {activeTab === 'PAYROLL' && <button onClick={syncAgentSales} disabled={isSyncingAgentSales} className="flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 disabled:opacity-50" title="Sheets’dan tanlangan oy agent savdosini yangilash">
+            <RefreshCw className={`h-4 w-4 ${isSyncingAgentSales ? 'animate-spin' : ''}`} /><span>{isSyncingAgentSales ? 'Sinxronlanmoqda…' : 'Sheets savdosini yangilash'}</span>
+          </button>}
 
           <button
             onClick={() => setShowWorkModal(true)}
