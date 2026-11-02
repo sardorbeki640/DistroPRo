@@ -22,6 +22,17 @@ export const errorHandler = (
     return;
   }
 
+  // Missing Sheets setup is an actionable configuration problem, not a server crash.
+  // Keep the instruction visible to the user instead of disguising it as HTTP 500.
+  const message = String(err?.message || '');
+  if (message.includes('Google Sheets ulanishini yoqing') || message.includes('Sheets ulanishi sozlanmagan')) {
+    res.status(400).json({
+      success: false,
+      error: 'Google Sheets manbasi tanlangan, lekin Sheets hali ulanmagan. Sozlamalarda Google Sheets URL manzilini saqlang yoki KPI uchun “Ulangan tizim” manbasini tanlang.'
+    });
+    return;
+  }
+
   // Unknown exceptions are server failures, not client validation errors.
   const requestedStatus = Number(err.status || err.statusCode);
   const status = Number.isInteger(requestedStatus) && requestedStatus >= 400 && requestedStatus <= 599 ? requestedStatus : 500;
