@@ -20,7 +20,8 @@ import {
   Contact,
   UserCircle,
   ScanFace,
-  Bot
+  Bot,
+  Gift
 } from 'lucide-react';
 import { NavView, AuthUser } from '../types.ts';
 import { canOpen } from '../utils/permissions.ts';
@@ -52,6 +53,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'forecast' as NavView, label: 'Prognozlar & Zaxira Tahlili', icon: TrendingUp },
     { id: 'cash' as NavView, label: 'Kassa Reestri', icon: Wallet },
     { id: 'customers' as NavView, label: 'Mijozlar & Nasiya', icon: Users },
+    { id: 'loyalty' as NavView, label: 'Sodiqlik dasturi', icon: Gift },
     { id: 'expenses' as NavView, label: 'Xarajatlar', icon: Receipt },
     { id: 'employees' as NavView, label: 'Xodimlar & Oylik', icon: UserCheck },
     { id: 'attendance' as NavView, label: 'Davomat & Face ID', icon: ScanFace },

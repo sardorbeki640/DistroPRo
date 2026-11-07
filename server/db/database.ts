@@ -38,6 +38,7 @@ const INITIAL_EMPTY_SCHEMA: DatabaseSchema = {
   products: [],
   sales_orders: [],
   sales_order_items: [],
+  loyalty_programs: [],
   notification_events: [],
   notification_channels: [],
   notification_rules: [],

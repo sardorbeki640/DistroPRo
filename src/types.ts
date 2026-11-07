@@ -439,7 +439,26 @@ export type NavView =
   | 'crm'
   | 'cabinet'
   | 'attendance'
+  | 'loyalty'
   | 'jarvis';
+
+export interface LoyaltyProgram {
+  id: string;
+  company_id: string;
+  name: string;
+  metric: 'QUANTITY' | 'AMOUNT';
+  unit: string;
+  product_ids: string[];
+  group_by_agent: boolean;
+  start_date: string;
+  end_date: string;
+  tiers: { id: string; threshold: number; reward: string }[];
+  terms: string[];
+  is_active: boolean;
+  archived_at?: string | null;
+  created_at: string;
+  updated_at?: string;
+}
 
 export interface StockRunRateItem {
   id: string;

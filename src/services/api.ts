@@ -777,6 +777,18 @@ export const api = {
     return fetchApi(`/api/customers${qs}`);
   },
 
+  loyalty: {
+    programs: (): Promise<{ programs: import('../types.ts').LoyaltyProgram[] }> => fetchApi('/api/loyalty/programs'),
+    results: (id: string): Promise<{ rows: any[]; summary: { customers: number; qualified: number; orders: number; total_value: number; reward_counts: { reward: string; count: number }[] }; computed_from: string }> =>
+      fetchApi(`/api/loyalty/programs/${encodeURIComponent(id)}/results`),
+    create: (body: Omit<import('../types.ts').LoyaltyProgram, 'id' | 'company_id' | 'created_at' | 'updated_at' | 'archived_at'>): Promise<{ program: import('../types.ts').LoyaltyProgram }> =>
+      fetchApi('/api/loyalty/programs', { method: 'POST', body: JSON.stringify(body) }),
+    update: (id: string, body: Omit<import('../types.ts').LoyaltyProgram, 'id' | 'company_id' | 'created_at' | 'updated_at' | 'archived_at'>): Promise<{ program: import('../types.ts').LoyaltyProgram }> =>
+      fetchApi(`/api/loyalty/programs/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }),
+    toggleArchive: (id: string): Promise<{ program: import('../types.ts').LoyaltyProgram }> =>
+      fetchApi(`/api/loyalty/programs/${encodeURIComponent(id)}/archive`, { method: 'POST' })
+  },
+
   createCustomer: async (data: any): Promise<{ customer: any }> => {
     return fetchApi('/api/customers', {
       method: 'POST',

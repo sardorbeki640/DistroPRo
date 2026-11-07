@@ -47,6 +47,7 @@ import aiRoutes from './server/routes/ai.routes.ts';
 import attendanceRoutes from './server/routes/attendance.routes.ts';
 import staffTelegramRoutes from './server/routes/staff-telegram.routes.ts';
 import jarvisRoutes from './server/routes/jarvis.routes.ts';
+import loyaltyRoutes from './server/routes/loyalty.routes.ts';
 import { JarvisService } from './server/jarvis/jarvis.service.ts';
 import { errorHandler } from './server/middleware/error.middleware.ts';
 import { SetupService } from './server/services/setup.service.ts';
@@ -181,6 +182,7 @@ async function startServer() {
   app.use('/api/attendance', attendanceRoutes);
   app.use('/api/me/telegram', staffTelegramRoutes);
   app.use('/api/jarvis', jarvisRoutes);
+  app.use('/api/loyalty', loyaltyRoutes);
   // An unknown API path is an error, not the web page (which the app would read as a broken answer).
   app.use('/api', (req, res) => { res.status(404).json({ success: false, error: `API topilmadi: ${req.method} ${req.originalUrl}` }); });
 

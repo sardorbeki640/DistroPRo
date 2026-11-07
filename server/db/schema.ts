@@ -795,6 +795,26 @@ export interface SalesOrder {
   updated_at?: string;
 }
 
+/** Editable loyalty / promotion campaign. Results are calculated from delivered sales, never copied into this record. */
+export interface LoyaltyProgram {
+  id: string;
+  company_id: string;
+  name: string;
+  metric: 'QUANTITY' | 'AMOUNT';
+  unit: string;
+  product_ids: string[];
+  group_by_agent: boolean;
+  start_date: string;
+  end_date: string;
+  tiers: { id: string; threshold: number; reward: string }[];
+  terms: string[];
+  is_active: boolean;
+  archived_at?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at?: string;
+}
+
 // Phase 8: Notification Architecture & Telegram Bot
 export type NotificationEventType = 
   | 'DEBT_THRESHOLD_EXCEEDED'
@@ -1147,6 +1167,7 @@ export interface DatabaseSchema {
   products: Product[];
   sales_orders: SalesOrder[];
   sales_order_items: SalesOrderItem[];
+  loyalty_programs: LoyaltyProgram[];
   notification_events: NotificationEvent[];
   notification_channels: NotificationChannel[];
   notification_rules: NotificationRule[];

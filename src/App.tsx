@@ -18,6 +18,7 @@ const IntegrationsView = React.lazy(() => import('./components/views/Integration
 const SettingsView = React.lazy(() => import('./components/views/SettingsView.tsx').then(m => ({ default: m.SettingsView })));
 const ExpensesView = React.lazy(() => import('./components/views/ExpensesView.tsx').then(m => ({ default: m.ExpensesView })));
 const CustomersView = React.lazy(() => import('./components/views/CustomersView.tsx').then(m => ({ default: m.CustomersView })));
+const LoyaltyView = React.lazy(() => import('./components/views/LoyaltyView.tsx').then(m => ({ default: m.LoyaltyView })));
 const EmployeesView = React.lazy(() => import('./components/views/EmployeesView.tsx').then(m => ({ default: m.EmployeesView })));
 const ReportsView = React.lazy(() => import('./components/views/ReportsView.tsx').then(m => ({ default: m.ReportsView })));
 const BalanceView = React.lazy(() => import('./components/views/BalanceView.tsx').then(m => ({ default: m.BalanceView })));
@@ -172,6 +173,8 @@ export default function App() {
         return <ExpensesView user={user} />;
       case 'customers':
         return <CustomersView user={user} />;
+      case 'loyalty':
+        return <LoyaltyView user={user} />;
       case 'employees':
         return <EmployeesView user={user} />;
       case 'reports':

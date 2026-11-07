@@ -26,6 +26,7 @@ export const VIEW_PERMISSION: Record<NavView, string | null> = {
   crm: 'crm:view',
   cabinet: null,
   attendance: 'employee:view',
+  loyalty: 'reports:view',
   jarvis: null // owner / admin only, see canOpen
 };
 
