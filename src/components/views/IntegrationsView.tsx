@@ -586,21 +586,9 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
         <div className={`rounded-2xl border p-5 shadow-xs ${history?.complete ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-300 bg-amber-50'}`}>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="text-xs space-y-1">
-              <h2 className="text-sm font-bold text-neutral-900">{historyName} buyurtmalar tarixi (hisobot va prognoz shu tarixdan hisoblanadi)</h2>
-              {historyRunning || history?.status === 'RUNNING' ? (
-                <p className="font-semibold text-amber-900">
-                  Yuklanmoqda: {history?.current || '...'} oyi · {history?.months_done || 0} oy tayyor · {history?.orders || 0} ta buyurtma
-                  {!historyRunning && ' (server to‘xtagan — qayta ishga tushganda davom etadi)'}
-                </p>
-              ) : history?.complete ? (
-                <p className="font-semibold text-emerald-800">To‘liq: {history.start || history.from} — {history.to} · {history.orders} ta buyurtma</p>
-              ) : history?.status === 'FAILED' ? (
-                <p className="font-semibold text-red-700">To‘xtadi: {history.error}. Yuklangan oylar saqlangan; qayta bosing — qolgan joydan davom etadi.</p>
-              ) : history ? (
-                <p className="font-semibold text-amber-900">To‘liq emas: {history.from ? `${history.from} dan boshlab yuklangan` : 'hali yuklanmagan'}. Prognoz ishonchsiz.</p>
-              ) : (
-                <p className="font-semibold text-amber-900">Tarix hali yuklanmagan. Prognoz hisoblanmaydi.</p>
-              )}
+              <h2 className="text-sm font-bold text-neutral-900">{historyName} buyurtmalar tarixi · jonli so‘rov</h2>
+              <p className="font-semibold text-emerald-800">Prognoz ochilganda kerakli sana oralig‘i {historyName} tizimidan olinadi; yangi buyurtmalar bazaga ko‘chirilmaydi. Takroriy so‘rovlar qisqa muddat xotirada keshlanadi.</p>
+              {history && <p className="text-neutral-600">Bazadagi avvalgi nusxa: {history.start || history.from || 'sana ko‘rsatilmagan'} — {history.to || '—'} · {history.orders || 0} ta buyurtma · {history.status || 'mavjud'}</p>}
               {history && (
                 <p className="text-neutral-600">
                   Birinchi buyurtma: {history.first_order || '—'} · O‘tkazib yuborilgan (mijoz yoki sanasi yo‘q): {history.skipped || 0}
@@ -620,15 +608,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
                 </p>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => { handleSync(historyProvider); setTimeout(() => setHistoryPoll(true), 1500); }}
-              disabled={historyRunning || syncingProvider === historyProvider}
-              className="px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl shadow-xs flex items-center gap-1.5 shrink-0"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${historyRunning ? 'animate-spin' : ''}`} />
-              <span>{history?.complete ? 'Tarixni yangilash' : 'To‘liq tarixni yuklash'}</span>
-            </button>
+            <span className="px-3 py-2 text-xs font-semibold text-emerald-800 bg-emerald-100 rounded-lg shrink-0">Faqat so‘rovda olinadi</span>
           </div>
         </div>
       )}

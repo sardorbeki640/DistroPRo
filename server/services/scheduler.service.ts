@@ -56,6 +56,10 @@ export function runDueSyncs(now = Date.now()): string[] {
     lastAttempt.set(integration.id, now);
 
     if (isSalesDoc) {
+      // Historical orders are large and mostly read-only. They are queried from
+      // the provider when a report is opened; only an explicit opt-in keeps the
+      // old background copy in the local/Turso database.
+      if (integration.config?.auto_history_sync !== true) continue;
       if (SalesDocHistoryService.isRunning(integration.id)) continue;
       SalesDocHistoryService.start(integration.company_id, integration.id, 'system-scheduler', history?.complete && !interrupted ? 'recent' : 'full', adapter as HistoryAdapter);
       started.push(integration.id);

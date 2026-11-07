@@ -21,7 +21,6 @@ import type {
 import { AuditService } from '../services/audit.service.ts';
 import { ForecastService } from '../services/forecast.service.ts';
 import { inventoryObservation } from '../services/inventory-observation.ts';
-import { SalesDocHistoryService } from '../services/salesdoc-history.service.ts';
 import { tagIntegrationRows } from '../services/source-tagging.service.ts';
 import { CustomerBalanceService } from '../services/customer_balance.service.ts';
 import { canonicalCustomerCode, computeOrderCogs, isPlausibleCost } from '../services/cogs.ts';
@@ -120,16 +119,13 @@ export class IntegrationProvider {
     if (integrationRecord?.disabled) throw new Error(`${upperProvider} o‘chirilgan. Sinxronlash uchun avval integratsiyani yoqing.`);
     // Any system that can give its order history month by month (SalesDoctor, Linko, …) loads it that way.
     if (capabilitiesOf(adapter).history && integrationRecord) {
-      // Full history can take many minutes, so it runs in the background and reports progress per month.
-      const alreadyRunning = SalesDocHistoryService.isRunning(integrationRecord.id);
-      if (!alreadyRunning) SalesDocHistoryService.start(companyId, integrationRecord.id, userId, 'full', adapter as any);
       return {
         provider: adapter.providerName,
-        status: 'PARTIAL',
+        status: 'SUCCESS',
         recordsImported: 0,
         recordsFailed: 0,
         syncedAt: new Date().toISOString(),
-        details: { background: true, message: alreadyRunning ? 'Tarix allaqachon yuklanmoqda.' : 'To‘liq tarix fonda yuklanmoqda. Holati integratsiya sahifasida ko‘rinadi.' }
+        details: { readOnly: true, message: 'Buyurtmalar tarixi hisobot ochilganda bevosita manbadan olinadi; tarixiy buyurtmalar bazaga nusxalanmaydi.' }
       };
     }
 

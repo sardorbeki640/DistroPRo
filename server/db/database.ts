@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { createClient, type Client } from '@libsql/client';
 import type { DatabaseSchema } from './schema.ts';
 import { decryptSecret, encryptSecret } from '../jarvis/secrets.ts';
@@ -403,7 +404,27 @@ class DatabaseManager {
     while (true) {
       const ops = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id LIMIT 50').all() as TursoOutboxOp[];
       if (!ops.length) return;
-      const statements = ops.flatMap(op => {
+      // Collapse repeated edits to the same row in this batch. A clear is a barrier:
+      // writes before it are discarded and writes after it must still be applied.
+      const compacted: TursoOutboxOp[] = [];
+      let segment: TursoOutboxOp[] = [];
+      const flushSegment = () => {
+        const lastByKey = new Map<string, TursoOutboxOp>();
+        for (const op of segment) {
+          if (op.k === null) continue;
+          lastByKey.set(`${op.tbl}\u0000${op.k}`, op);
+        }
+        compacted.push(...[...lastByKey.values()].sort((a, b) => a.id - b.id));
+        segment = [];
+      };
+      for (const op of ops) {
+        if (op.op === 'clear') {
+          flushSegment();
+          compacted.push(op);
+        } else segment.push(op);
+      }
+      flushSegment();
+      const statements = compacted.flatMap(op => {
         if (op.op === 'clear') return [{ sql: 'DELETE FROM distropro_rows WHERE tbl = ?', args: [op.tbl] }];
         if (op.op === 'delete' && op.k !== null) return [{ sql: 'DELETE FROM distropro_rows WHERE tbl = ? AND k = ?', args: [op.tbl, op.k] }];
         if (op.op === 'upsert' && op.k !== null && op.seq !== null && op.data !== null) {
@@ -763,8 +784,17 @@ class DatabaseManager {
           inserted++;
         } else {
           const m = this.meta.get(old) || this.ensureMeta(t, old);
+          const merged = { ...old, ...record };
+          const beforeComparable = { ...old };
+          const nextComparable = { ...merged };
+          // Importers stamp every row with the current time. Ignore that field when
+          // deciding whether business data changed, so an unchanged directory does
+          // not generate a Turso row write on every refresh.
+          delete beforeComparable.updated_at;
+          delete nextComparable.updated_at;
+          if (isDeepStrictEqual(beforeComparable, nextComparable)) continue;
           replaced.push({ key: m.key, row: old, before: { ...old } });
-          Object.assign(old, record);
+          Object.assign(old, merged);
           idx.set(m.key, old);
           this.touch(t, m.key);
           updated++;

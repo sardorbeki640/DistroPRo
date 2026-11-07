@@ -4,9 +4,10 @@ import { AuditService } from './audit.service.ts';
 import { NotificationService } from './notification.service.ts';
 import { integrationProvider } from '../integrations/provider.ts';
 import { addDays, businessToday, daysBetween, isValidIsoDate } from '../utils/date.ts';
-import { SalesDocHistoryService } from './salesdoc-history.service.ts';
 import { activeDistribution, distributionIntegrations } from '../integrations/distribution.ts';
 import { isPlausibleCost } from './cogs.ts';
+import { LiveHistoryService } from './live-history.service.ts';
+import type { ExternalSyncOrder } from '../integrations/interfaces.ts';
 
 export interface StockRunRateItem {
   id: string;
@@ -161,7 +162,7 @@ export class ForecastService {
     for (const p of products) {
       const stock = Math.max(0, p.stock_quantity || 0);
       const baseDaily = Math.max(0, p.daily_sales_avg ?? 0);
-      const customDaily = customDailyDemandMap && customDailyDemandMap[p.id];
+      const customDaily = customDailyDemandMap ? customDailyDemandMap[p.id] : undefined;
       const effectiveDaily = customDaily !== undefined ? customDaily : baseDaily * runRateFactor;
 
       let daysRemaining = 0;
@@ -255,6 +256,72 @@ export class ForecastService {
     };
   }
 
+  /** Builds the forecast from a bounded read of the connected provider; never writes order history to local DB/Turso. */
+  public static async getStockRunRateLive(companyId: string, runRateFactor = 1, customDailyDemandMap?: Record<string, number>) {
+    const window = this.getForecastWindow(companyId);
+    const lookbackDays = Math.min(window.days, 180);
+    const live = await LiveHistoryService.getOrders(companyId, addDays(window.start, -lookbackDays), window.end);
+    const products = db.find('products', p => p.company_id === companyId && p.is_active && p.source_integration_id === live.integrationId);
+    const productBySku = new Map(products.map(p => [String(p.sku), p]));
+    const quantities = new Map<string, number>();
+    const saleDays = new Map<string, Set<string>>();
+    const firstSale = new Map<string, string>();
+    const lastSale = new Map<string, string>();
+    const deliveredOrderIds = new Set<string>();
+    for (const order of live.orders) {
+      if (!['DELIVERED', 'CLOSED'].includes(String(order.status).toUpperCase()) || !isValidIsoDate(order.orderDate) || order.orderDate < window.start || order.orderDate > window.end) continue;
+      deliveredOrderIds.add(order.externalId);
+      for (const line of order.items || []) {
+        const product = productBySku.get(String(line.sku || ''));
+        const quantity = Number(line.quantity);
+        if (!product || !Number.isFinite(quantity) || quantity <= 0) continue;
+        quantities.set(product.id, (quantities.get(product.id) || 0) + quantity);
+        const dates = saleDays.get(product.id) || new Set<string>();
+        dates.add(order.orderDate);
+        saleDays.set(product.id, dates);
+        if (!firstSale.has(product.id) || order.orderDate < firstSale.get(product.id)!) firstSale.set(product.id, order.orderDate);
+        if (!lastSale.has(product.id) || order.orderDate > lastSale.get(product.id)!) lastSale.set(product.id, order.orderDate);
+      }
+    }
+    const dailyDemand: Record<string, number> = { ...(customDailyDemandMap || {}) };
+    const forecastDays = daysBetween(window.start, window.end) + 1;
+    for (const p of products) if (!(p.id in dailyDemand)) dailyDemand[p.id] = (quantities.get(p.id) || 0) / Math.max(1, forecastDays);
+    const data = this.getStockRunRate(companyId, runRateFactor, dailyDemand);
+    data.items = data.items.map(item => {
+      const quantity = quantities.get(item.id) || 0;
+      const days = saleDays.get(item.id)?.size || 0;
+      const confidence: Product['velocity_confidence'] = days < 3 ? 'LOW' : days < 10 ? 'MEDIUM' : 'HIGH';
+      return { ...item, velocity_days: forecastDays, velocity_quantity: quantity, velocity_sale_days: days, first_sale_date: firstSale.get(item.id) || null, last_sale_date: lastSale.get(item.id) || null, confidence };
+    });
+    data.history = {
+      ...data.history,
+      complete: true,
+      covered: true,
+      covered_days: forecastDays,
+      window_from: window.start,
+      window_to: live.to,
+      history_from: window.start,
+      status: 'LIVE',
+      orders: deliveredOrderIds.size,
+      synced_at: live.fetchedAt,
+      warning: `${live.provider}dan ${live.from}–${live.to} oralig‘idagi tarix shu so‘rov uchun olindi. Buyurtmalar bazaga saqlanmadi.`
+    };
+    return data;
+  }
+
+  /** Stock-out analysis reads only a bounded live range and keeps the provider's orders out of the database. */
+  public static async getOutOfStockLostProfitLive(companyId: string) {
+    const window = this.getForecastWindow(companyId);
+    const lookbackDays = Math.min(window.days, 180);
+    const from = addDays(window.start, -lookbackDays);
+    const live = await LiveHistoryService.getOrders(companyId, from, window.end);
+    const result = this.getOutOfStockLostProfit(companyId, live.orders, live.from);
+    return {
+      ...result,
+      history: { source: live.provider, from: live.from, to: live.to, fetched_at: live.fetchedAt, saved_to_database: false }
+    };
+  }
+
   /**
    * Evaluates Stock-Out items, days missing, lost sales, and lost net profit
    */
@@ -266,7 +333,7 @@ export class ForecastService {
     return isValidIsoDate(since) && since <= businessToday() ? since : null;
   }
 
-  public static getOutOfStockLostProfit(companyId: string) {
+  public static getOutOfStockLostProfit(companyId: string, liveOrders?: ExternalSyncOrder[], liveFrom?: string) {
     this.ensureProductsWithVelocities(companyId);
     const w = this.getForecastWindow(companyId);
     const selectedIntegrationId=w.integrationId;
@@ -290,18 +357,33 @@ export class ForecastService {
       : !row.source_integration_id && (!row.source || row.source === 'MANUAL');
     const productByAlias = new Map<string, Product>();
     for (const p of products) for (const alias of [p.id, p.sku]) if (alias) productByAlias.set(String(alias), p);
-    const deliveredOrders = new Map(db.find('sales_orders', o => o.company_id === companyId && selectedSource(o) && o.status === 'DELIVERED')
-      .map(o => [o.id, o.order_date] as const));
     const salesByProduct = new Map<string, { date: string; qty: number; value: number }[]>();
-    for (const line of db.getTable('sales_order_items')) {
-      const p = productByAlias.get(String(line.product_id || '')) || productByAlias.get(String(line.sku || ''));
-      const date = deliveredOrders.get(line.sales_order_id);
-      const qty = Number(line.quantity);
-      if (!p || !date || !Number.isFinite(qty) || qty <= 0) continue;
-      const value = Number(line.total_amount) > 0 ? Number(line.total_amount) : Math.max(0, Number(line.unit_price) || 0) * qty;
-      const list = salesByProduct.get(p.id) || [];
-      list.push({ date, qty, value });
-      salesByProduct.set(p.id, list);
+    if (liveOrders) {
+      for (const order of liveOrders) {
+        if (!['DELIVERED', 'CLOSED'].includes(String(order.status).toUpperCase()) || !isValidIsoDate(order.orderDate)) continue;
+        for (const line of order.items || []) {
+          const p = productByAlias.get(String(line.sku || ''));
+          const qty = Number(line.quantity);
+          if (!p || !Number.isFinite(qty) || qty <= 0) continue;
+          const value = Number(line.total) > 0 ? Number(line.total) : Math.max(0, Number(line.price) || 0) * qty;
+          const list = salesByProduct.get(p.id) || [];
+          list.push({ date: order.orderDate, qty, value });
+          salesByProduct.set(p.id, list);
+        }
+      }
+    } else {
+      const deliveredOrders = new Map(db.find('sales_orders', o => o.company_id === companyId && selectedSource(o) && o.status === 'DELIVERED')
+        .map(o => [o.id, o.order_date] as const));
+      for (const line of db.getTable('sales_order_items')) {
+        const p = productByAlias.get(String(line.product_id || '')) || productByAlias.get(String(line.sku || ''));
+        const date = deliveredOrders.get(line.sales_order_id);
+        const qty = Number(line.quantity);
+        if (!p || !date || !Number.isFinite(qty) || qty <= 0) continue;
+        const value = Number(line.total_amount) > 0 ? Number(line.total_amount) : Math.max(0, Number(line.unit_price) || 0) * qty;
+        const list = salesByProduct.get(p.id) || [];
+        list.push({ date, qty, value });
+        salesByProduct.set(p.id, list);
+      }
     }
     for (const p of outItems) {
       const since = this.outOfStockSince(p);
@@ -311,17 +393,18 @@ export class ForecastService {
       const daysOut = since && stockObservedAt && stockObservedAt >= since ? Math.max(0, daysBetween(since, today)) : null;
       if (since === null || !stockObservedAt) sinceUnknownCount++;
       const lostFromCandidate = since ? addDays(since, 1) : null;
-      const coverageStart = w.coveredFrom > w.start ? w.coveredFrom : w.start;
+      const coverageStart = liveOrders && liveFrom ? (liveFrom > w.start ? liveFrom : w.start) : w.coveredFrom > w.start ? w.coveredFrom : w.start;
       const lostFrom = lostFromCandidate && lostFromCandidate > coverageStart ? lostFromCandidate : coverageStart;
       const lossEnd = stockObservedAt && stockObservedAt < w.end ? stockObservedAt : w.end;
-      const lostDaysInWindow = since && stockObservedAt && w.coveredDays > 0 && lostFrom <= lossEnd ? daysBetween(lostFrom, lossEnd) + 1 : 0;
+      const historyAvailable = liveOrders ? !!liveFrom : w.coveredDays > 0;
+      const lostDaysInWindow = since && stockObservedAt && historyAvailable && lostFrom <= lossEnd ? daysBetween(lostFrom, lossEnd) + 1 : 0;
       // Use a same-length, fully loaded period immediately before the first confirmed zero snapshot as the demand
       // baseline. Do not treat days after the zero snapshot as zero demand, or infer a stock-out from last_sale_date.
       const baselineEnd = since ? addDays(since, -1) : null;
       const requestedBaselineStart = baselineEnd ? addDays(baselineEnd, -(w.days - 1)) : null;
       const baselineStart = requestedBaselineStart && isValidIsoDate(w.history?.from) && w.history.from > requestedBaselineStart
         ? w.history.from : requestedBaselineStart;
-      const baselineDays = !baselineEnd || !baselineStart || baselineStart > baselineEnd || (selectedIntegrationId && !isValidIsoDate(w.history?.from))
+      const baselineDays = !baselineEnd || !baselineStart || baselineStart > baselineEnd || (selectedIntegrationId && !isValidIsoDate(w.history?.from) && !liveOrders) || (liveOrders && liveFrom && baselineStart < liveFrom)
         ? 0 : daysBetween(baselineStart, baselineEnd) + 1;
       const baselineLines = (salesByProduct.get(p.id) || []).filter(x => baselineStart && baselineEnd && x.date >= baselineStart && x.date <= baselineEnd);
       const soldBeforeOut = baselineLines.reduce((s, x) => s + x.qty, 0);
@@ -441,11 +524,8 @@ export class ForecastService {
     let message: string;
     let syncRes: any;
     if (dist.capabilities.history) {
-      // Stock and the last two months are refreshed in the background; older settled months are kept.
-      const running = SalesDocHistoryService.isRunning(integration.id);
-      if (!running) SalesDocHistoryService.start(companyId, integration.id, userId, integration.config?.history?.complete ? 'recent' : 'full', dist.adapter as any);
-      message = running ? `${dist.name} yuklanishi davom etmoqda.` : `${dist.name} qoldiqlari va oxirgi buyurtmalar fonda yangilanmoqda. Bir necha daqiqadan keyin sahifani yangilang.`;
-      syncRes = { background: true };
+      message = `${dist.name} buyurtmalar tarixi prognoz bo‘limida to‘g‘ridan-to‘g‘ri olinadi va bazaga saqlanmaydi.`;
+      syncRes = { readOnly: true, status: 'SUCCESS' };
     } else {
       syncRes = await integrationProvider.syncProvider(companyId, provider, userId, userEmail, integration.id);
       message = syncRes.status === 'FAILED' ? `${provider} yangilanmadi: ${(syncRes.errors || []).join('; ')}` : `${provider}: ${syncRes.recordsImported} ta yozuv yangilandi, ${syncRes.recordsFailed} ta o‘tkazib yuborildi.`;
@@ -465,8 +545,8 @@ export class ForecastService {
       reason: message
     });
 
-    const runRate = this.getStockRunRate(companyId);
-    const outOfStock = this.getOutOfStockLostProfit(companyId);
+    const runRate = dist.capabilities.history ? await this.getStockRunRateLive(companyId) : this.getStockRunRate(companyId);
+    const outOfStock = dist.capabilities.history ? await this.getOutOfStockLostProfitLive(companyId) : this.getOutOfStockLostProfit(companyId);
 
     return {
       success: syncRes.status !== 'FAILED',

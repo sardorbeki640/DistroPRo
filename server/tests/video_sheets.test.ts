@@ -71,8 +71,11 @@ test('the admin assigns a Telegram account: videos count without opening the bot
  const tg=fakeTelegram();company();
  const bot=await BotService.save('c',owner,{name:'Xodimlar',bot_token:TOKEN,chat_id:'',events:[],personal:true,checkin_chat_id:String(GROUP),checkin_chat_title:'Dostavka'});
  tg.sent.length=0;
+ // Keep this test's unassigned video inside the service's 31-day retention window.
+ const day1=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tashkent',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(Date.now()-3*86_400_000));
+ const day2=new Date(Date.parse(`${day1}T00:00:00Z`)+86_400_000).toISOString().slice(0,10);
  // Vali never opened the bot: his video is kept, nothing is said in the group.
- tg.video(888001,'2026-10-01T09:45:00+05:00');
+ tg.video(888001,`${day1}T09:45:00+05:00`);
  await StaffBotService.pollUpdates(db.findById('notification_channels',bot.id)!);
  assert.equal(tg.sent.length,0);
  assert.equal(db.find('attendance_events',e=>e.employee_id==='e-vali').length,0);
@@ -82,13 +85,13 @@ test('the admin assigns a Telegram account: videos count without opening the bot
  assert.throws(()=>StaffBotService.assignTelegram('c','e-vali','abc',owner),/raqamlardan/);
  const r=StaffBotService.assignTelegram('c','e-vali','888001',owner);
  assert.equal(r.counted,1);
- assert.equal(AttendanceService.dayFor(AttendanceService.settings('c'),'e-vali','2026-10-01').first_in,'09:45');
+ assert.equal(AttendanceService.dayFor(AttendanceService.settings('c'),'e-vali',day1).first_in,'09:45');
  assert.equal(StaffBotService.telegramAccounts('c').senders.length,0);
  assert.throws(()=>StaffBotService.assignTelegram('c','e-face','888001',owner),/allaqachon Vali/);
  // The next day his video counts straight away, with the reply in the group.
- tg.video(888001,'2026-10-02T09:30:00+05:00');
+ tg.video(888001,`${day2}T09:30:00+05:00`);
  await StaffBotService.pollUpdates(db.findById('notification_channels',bot.id)!);
- assert.equal(AttendanceService.dayFor(AttendanceService.settings('c'),'e-vali','2026-10-02').first_in,'09:30');
+ assert.equal(AttendanceService.dayFor(AttendanceService.settings('c'),'e-vali',day2).first_in,'09:30');
  assert.match(tg.sent.find(m=>m.chat_id===GROUP)!.text,/Vali Dostavchi — ish 09:30 da boshlandi/);
 });
 
