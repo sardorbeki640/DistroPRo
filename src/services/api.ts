@@ -780,6 +780,8 @@ export const api = {
 
   loyalty: {
     programs: (): Promise<{ programs: import('../types.ts').LoyaltyProgram[] }> => fetchApi('/api/loyalty/programs'),
+    agentResults: (agentId: string): Promise<{ agent: { id: string; name: string; code?: string }; rows: any[]; programs: number; computed_from: string }> =>
+      fetchApi(`/api/loyalty/agents/${encodeURIComponent(agentId)}/results`),
     results: (id: string): Promise<{ rows: any[]; summary: { customers: number; qualified: number; orders: number; total_value: number; reward_counts: { reward: string; count: number }[] }; computed_from: string }> =>
       fetchApi(`/api/loyalty/programs/${encodeURIComponent(id)}/results`),
     create: (body: Omit<import('../types.ts').LoyaltyProgram, 'id' | 'company_id' | 'created_at' | 'updated_at' | 'archived_at'>): Promise<{ program: import('../types.ts').LoyaltyProgram }> =>

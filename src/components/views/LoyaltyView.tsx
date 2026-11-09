@@ -38,8 +38,9 @@ function emptyDraft(): Draft {
 
 function sheetDraft(products: Product[]): Draft {
   const draft = emptyDraft();
-  // SalesDoc imports its stable reference as sku; external_id is not populated by that adapter.
-  const productIds = products.filter(p => ['d0_5', 'd0_6'].includes(String(p.external_id || p.sku || '').trim())).map(p => p.id);
+  // This reward sheet is kilogram-based; never silently apply its kg thresholds to piece-count products.
+  const productIds = products.filter(p => ['d0_5', 'd0_6'].includes(String(p.external_id || p.sku || '').trim())
+    && normalizeUnit(p.unit) === 'kg').map(p => p.id);
   return { ...draft, name: 'Semichka Premium — aksiya shabloni', metric: 'QUANTITY', unit: 'kg', product_ids: productIds, group_by_agent: true,
     start_date: '2026-11-03', end_date: '2026-11-30', tiers: sheetTiers.map(t => ({ ...t, id: `tier-${Date.now()}-${t.id}` })), terms: [...sheetTerms] };
 }
@@ -91,7 +92,9 @@ export const LoyaltyView: React.FC<{ user: AuthUser | null }> = ({ user }) => {
   const visiblePrograms = useMemo(() => programs.filter(p => (includeArchived || p.is_active) && p.name.toLowerCase().includes(search.toLowerCase())), [programs, includeArchived, search]);
   const selected = programs.find(p => p.id === selectedId) || null;
   const selectedProducts = products.filter(p => draft?.product_ids.includes(p.id));
-  const unitMismatch = draft?.metric === 'QUANTITY' && selectedProducts.some(p => normalizeUnit(p.unit) !== normalizeUnit(selectedProducts[0]?.unit || ''));
+  const unitMismatch = draft?.metric === 'QUANTITY' && selectedProducts.some(p => normalizeUnit(p.unit) !== normalizeUnit(draft.unit || '')
+    || normalizeUnit(p.unit) !== normalizeUnit(selectedProducts[0]?.unit || ''));
+  const templateNeedsKgProduct = !!draft && draft.name.includes('Semichka Premium') && draft.metric === 'QUANTITY' && !draft.product_ids.length;
   const isEditing = !!draft;
 
   const startNew = (fromSheet = false) => {
@@ -104,10 +107,10 @@ export const LoyaltyView: React.FC<{ user: AuthUser | null }> = ({ user }) => {
     if (!draft) return;
     setError(''); setNotice('');
     if (draft.metric === 'QUANTITY' && !draft.product_ids.length) { setError('Miqdor aksiyasi uchun hisoblanadigan mahsulotlarni tanlang.'); return; }
-    if (unitMismatch) { setError('Miqdor sharti uchun bir xil birlikdagi mahsulotlarni tanlang.'); return; }
+    if (unitMismatch) { setError('Aksiya birligi bilan mahsulot birligi mos emas. Masalan, kg shartida kg mahsulotni tanlang.'); return; }
     if (!draft.tiers.length || draft.tiers.some(t => !t.reward.trim() || !(Number(t.threshold) > 0))) { setError('Har bir sovg‘aga 0 dan katta chegara va nom kiriting.'); return; }
     if (draft.start_date > draft.end_date) { setError('Aksiya sanalari oralig‘i noto‘g‘ri.'); return; }
-    const body = { ...draft, unit: draft.metric === 'AMOUNT' ? 'UZS' : selectedProducts[0]?.unit || draft.unit,
+    const body = { ...draft, unit: draft.metric === 'AMOUNT' ? 'UZS' : draft.unit || selectedProducts[0]?.unit || '',
       tiers: draft.tiers.map(t => ({ ...t, threshold: Number(t.threshold), reward: t.reward.trim() })),
       terms: draft.terms.map(t => t.trim()).filter(Boolean) };
     setSaving(true);
@@ -148,7 +151,7 @@ export const LoyaltyView: React.FC<{ user: AuthUser | null }> = ({ user }) => {
       <div className="flex flex-wrap gap-2">
         <button onClick={() => void load()} disabled={loading || saving} className="inline-flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"><RefreshCw size={15} className={loading ? 'animate-spin' : ''}/> Yangilash</button>
         {owner && <>
-          <button onClick={() => startNew(true)} disabled={loading || saving} className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"><Gift size={15}/> Sheet shablonidan</button>
+          <button onClick={() => startNew(true)} disabled={loading || saving} className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"><Gift size={15}/> Tayyor aksiya shabloni</button>
           <button onClick={() => startNew(false)} disabled={loading || saving} className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-800 disabled:opacity-50"><Plus size={15}/> Yangi aksiya</button>
         </>}
       </div>
@@ -186,11 +189,17 @@ export const LoyaltyView: React.FC<{ user: AuthUser | null }> = ({ user }) => {
             <div className="mb-2 flex items-center justify-between"><div><p className="text-xs font-semibold text-neutral-700">Hisoblanadigan mahsulotlar</p><p className="mt-0.5 text-[11px] text-neutral-500">Bir xil o‘lchov birligidagi mahsulotlarni tanlang.</p></div><span className="rounded-full bg-neutral-100 px-2 py-1 text-[11px] text-neutral-600">{selectedProducts.length} ta</span></div>
             <div className="max-h-48 space-y-1 overflow-auto">
               {products.length ? products.map(product => <label key={product.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-neutral-50">
-                <input type="checkbox" checked={draft.product_ids.includes(product.id)} onChange={e => setField('product_ids', e.target.checked ? [...draft.product_ids, product.id] : draft.product_ids.filter(id => id !== product.id))} className="accent-emerald-700"/>
+                <input type="checkbox" checked={draft.product_ids.includes(product.id)} onChange={e => setDraft(old => {
+                  if (!old) return old;
+                  const ids = e.target.checked ? [...old.product_ids, product.id] : old.product_ids.filter(id => id !== product.id);
+                  const first = products.find(p => ids.includes(p.id));
+                  return { ...old, product_ids: ids, unit: old.metric === 'QUANTITY' && !old.unit ? first?.unit || '' : old.unit };
+                })} className="accent-emerald-700"/>
                 <span className="min-w-0 flex-1 truncate text-neutral-800">{product.name}</span><span className="text-[11px] text-neutral-500">{product.unit}{product.external_id ? ` · ${product.external_id}` : ''}</span>
               </label>) : <p className="px-2 py-4 text-center text-xs text-neutral-500">Mahsulotlar hali yuklanmagan. SalesDoc integratsiyasini va sinxronlashni tekshiring.</p>}
             </div>
-            {unitMismatch && <p className="mt-2 text-xs text-rose-700">Tanlangan mahsulotlar birliklari turlicha.</p>}
+            {templateNeedsKgProduct && <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-2 text-xs text-amber-800">Ushbu aksiya chegaralari kg’da. Bazada shablon uchun kg o‘lchovli mahsulot topilmadi. To‘g‘ri kg mahsulotni tanlang; dona mahsulotni tanlasangiz kg chegaralari bilan solishtirilmaydi.</p>}
+            {unitMismatch && <p className="mt-2 text-xs text-rose-700">Aksiya birligi ({draft.unit || 'tanlanmagan'}) tanlangan mahsulot birligiga mos emas. Kg chegaralarini dona sifatida hisoblamaslik uchun saqlash bloklandi.</p>}
           </div> : <p className="rounded-xl bg-blue-50 px-3 py-2.5 text-xs leading-5 text-blue-800">Sotuv summasi yetkazilgan buyurtmaning chegirma va qaytarishlar hisobga olingan sof savdo summasidan olinadi; qarzning to‘langan/to‘lanmaganligi natijaga ta’sir qilmaydi.</p>}
         </div>
 
@@ -237,12 +246,13 @@ export const LoyaltyView: React.FC<{ user: AuthUser | null }> = ({ user }) => {
           <div className="flex flex-col gap-3 rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm sm:flex-row sm:items-start sm:justify-between sm:p-5">
             <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-bold text-neutral-900">{selected.name}</h2><span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${selected.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-neutral-100 text-neutral-600'}`}>{selected.is_active ? 'Faol' : 'Arxivlangan'}</span></div>
               <p className="mt-1.5 flex items-center gap-1.5 text-xs text-neutral-500"><CalendarDays size={13}/> {selected.start_date} — {selected.end_date} <span className="mx-1">·</span>{selected.metric === 'AMOUNT' ? 'Sof sotuv summasi · UZS' : `Mahsulot miqdori · ${selected.unit}`}</p>
-              <p className="mt-1 text-[11px] text-neutral-500">Guruhlash: {selected.group_by_agent ? 'mijoz + agent (Sheetdagi kabi)' : 'mijoz bo‘yicha jami'} · Manba: sinxronlangan, yetkazilgan buyurtmalar</p>
+              <p className="mt-1 text-[11px] text-neutral-500">Guruhlash: {selected.group_by_agent ? 'mijoz + agent (Sheetdagi kabi)' : 'mijoz bo‘yicha jami'} · Manba: tanlangan serverning bazaga yuklangan tarixi · faqat yetkazilgan savdolar</p>
             </div>
             {owner && <div className="flex shrink-0 flex-wrap gap-2"><button onClick={() => editProgram(selected)} className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"><Settings2 size={14}/> Shartlarni tahrirlash</button><button onClick={() => void toggleArchive(selected)} disabled={saving} className="rounded-lg border border-neutral-200 px-3 py-2 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 disabled:opacity-50">{selected.is_active ? 'Arxivlash' : 'Qayta faollashtirish'}</button></div>}
           </div>
 
           {selected.terms.length > 0 && <details className="group rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3"><summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-xs font-semibold text-amber-900"><span className="flex items-center gap-2"><Settings2 size={14}/> Aksiya shartlari ({selected.terms.length})</span><ChevronDown size={15} className="transition group-open:rotate-180"/></summary><ol className="mt-3 list-decimal space-y-1.5 pl-5 text-xs leading-5 text-amber-950">{selected.terms.map((term, index) => <li key={`${selected.id}-term-${index}`}>{term}</li>)}</ol></details>}
+          {selected.metric === 'QUANTITY' && selected.terms.some(term => /kilogram|kilogramm|\bkg\b/i.test(term)) && normalizeUnit(selected.unit) !== 'kg' && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs leading-5 text-rose-800"><b>Birlik mos emas:</b> aksiya shartlarida kilogramm yozilgan, lekin dastur {selected.unit} bo‘yicha hisoblayapti. Tahrirlashda kg o‘lchovli mahsulotni tanlang; dona mahsulot uchun kg↔dona konversiyasi kerak.</div>}
 
           <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
             <div className="flex flex-col gap-2 border-b border-neutral-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="text-sm font-bold text-neutral-800">Mijozlar natijasi</h3><p className="mt-0.5 text-[11px] text-neutral-500">Hisoblash oralig‘i aksiya sanalari bilan bir xil. Faqat “Yetkazilgan” buyurtmalar kiradi.</p></div><div className="flex items-center gap-2"><span className="text-xs text-neutral-500">{results?.summary.qualified ?? 0} ta shartni bajargan</span><button onClick={() => void load()} title="Hisobotni yangilash" className="rounded-lg border border-neutral-200 p-2 text-neutral-600 hover:bg-neutral-50"><RefreshCw size={14}/></button></div></div>

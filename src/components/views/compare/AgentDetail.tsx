@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Download, Phone, RefreshCw, X } from 'lucide-react';
+import { Download, Gift, Phone, RefreshCw, X } from 'lucide-react';
 import { api } from '../../../services/api.ts';
 import { localToday } from '../../../utils/date';
 import { AgentStrategy } from './AgentStrategy.tsx';
@@ -10,6 +10,7 @@ const COLOR_A = '#8b5cf6';
 const COLOR_B = '#0d9488';
 const money = (v: number | null | undefined) => v === null || v === undefined ? '—' : Math.round(v).toLocaleString('uz-UZ');
 const mln = (v: number) => Math.abs(v) >= 1_000_000 ? `${(v / 1_000_000).toFixed(1).replace('.0', '')} mln` : money(v);
+const quantity = (v: number) => new Intl.NumberFormat('uz-UZ', { maximumFractionDigits: 2 }).format(Number(v) || 0);
 const dm = (s: string) => `${s.slice(8, 10)}.${s.slice(5, 7)}`;
 const span = (p: Period) => `${dm(p.from)} — ${dm(p.to)}`;
 
@@ -107,12 +108,21 @@ const CUSTOMER_TABS: [string, string][] = [['stopped', 'Xarid qilmay qo‘ygan']
 export const AgentDetail: React.FC<{ agentId: string; a: Period; b: Period; integrationId?: string | null; onClose?: () => void; embedded?: boolean; data?: any; strategy?: any }> = ({ agentId, a, b, integrationId, onClose = () => {}, embedded = false, data, strategy }) => {
   const [d, setD] = useState<any>(data || null);
   const [error, setError] = useState<string | null>(null);
+  const [loyalty, setLoyalty] = useState<any>(null);
+  const [loyaltyError, setLoyaltyError] = useState<string | null>(null);
   const [tab, setTab] = useState('stopped');
   useEffect(() => {
     if (data) { setD(data); return; }
     setD(null); setError(null);
     api.getCompareAgent(agentId, a, b, integrationId).then(setD).catch(e => setError(e.message));
   }, [agentId, a.from, a.to, b.from, b.to, integrationId, data]);
+  useEffect(() => {
+    let alive = true;
+    setLoyalty(null); setLoyaltyError(null);
+    api.loyalty.agentResults(agentId).then(value => { if (alive) setLoyalty(value); })
+      .catch(e => { if (alive) setLoyaltyError(e.message || 'Sodiqlik ma’lumotlari olinmadi.'); });
+    return () => { alive = false; };
+  }, [agentId]);
   useEffect(() => {
     if (embedded) return;
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -359,6 +369,30 @@ export const AgentDetail: React.FC<{ agentId: string; a: Period; b: Period; inte
                 </table>
               </div>
               {tab === 'stopped' && d.customers.counts.stopped > 0 && <p className="mt-2 text-[11px] text-neutral-500">1-davrda xarid qilib, 2-davrda umuman olmagan mijozlar — agent bilan birga ularga qo‘ng‘iroq qiling yoki CRM’da vazifa bering.</p>}
+            </div>
+
+            <div className="overflow-hidden rounded-xl border border-emerald-200 bg-white">
+              <div className="flex items-start gap-2 border-b border-emerald-100 bg-emerald-50/70 px-3 py-2.5">
+                <Gift className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
+                <div><h3 className="text-sm font-bold text-neutral-900">Sodiqlik aksiyalari bo‘yicha mijozlar</h3><p className="text-[11px] text-neutral-600">Agentga tegishli mijozlarning xaridi, olgan va keyingi sovg‘asi hamda qolgan miqdori.</p></div>
+              </div>
+              {loyaltyError ? <p className="p-3 text-xs text-rose-700">{loyaltyError}</p>
+                : !loyalty ? <p className="flex items-center gap-2 p-3 text-xs text-neutral-500"><RefreshCw className="h-3.5 w-3.5 animate-spin"/> Sodiqlik natijalari olinmoqda…</p>
+                  : loyalty.rows.length ? <div className="max-h-80 overflow-auto">
+                    <table className="min-w-[900px] w-full text-xs">
+                      <thead className="sticky top-0 bg-neutral-50 text-left text-[10px] uppercase text-neutral-500"><tr><th className="px-3 py-2">Aksiya / mijoz</th><th className="px-3 py-2">Telefon / manzil</th><th className="px-3 py-2 text-right">Sotuv</th><th className="px-3 py-2 text-right">Buyurtma</th><th className="px-3 py-2">Olgan sovg‘a</th><th className="px-3 py-2">Keyingi sovg‘a</th><th className="px-3 py-2 text-right">Qolgan</th><th className="px-3 py-2">Davri</th></tr></thead>
+                      <tbody className="divide-y divide-neutral-100">{loyalty.rows.map((row: any) => <tr key={`${row.program_id}|${row.customer_id}`}>
+                        <td className="px-3 py-2"><b>{row.program_name}</b><span className="mt-0.5 block text-neutral-500">{row.customer}{row.customer_code ? ` · ${row.customer_code}` : ''}</span></td>
+                        <td className="px-3 py-2 text-neutral-600">{[row.customer_phone, row.customer_address].filter(Boolean).join(' · ') || '—'}</td>
+                        <td className="px-3 py-2 text-right font-semibold">{row.metric === 'AMOUNT' ? money(row.value) : `${quantity(row.value)} ${row.unit}`}</td>
+                        <td className="px-3 py-2 text-right">{row.order_count}</td>
+                        <td className="px-3 py-2">{row.earned_reward || '—'}</td><td className="px-3 py-2">{row.next_reward || (row.earned_reward ? 'Barcha bosqich bajarildi' : '—')}</td>
+                        <td className="px-3 py-2 text-right">{row.remaining === null ? '—' : row.metric === 'AMOUNT' ? money(row.remaining) : `${quantity(row.remaining)} ${row.unit}`}</td>
+                        <td className="px-3 py-2 text-neutral-500">{row.start_date} — {row.end_date}{!row.is_active ? ' · arxiv' : ''}</td>
+                      </tr>)}</tbody>
+                    </table>
+                    <p className="border-t border-neutral-100 px-3 py-2 text-[10px] text-neutral-500">{loyalty.computed_from}</p>
+                  </div> : <p className="p-3 text-xs text-neutral-500">Ushbu agentga tegishli va aksiya davriga tushadigan mijoz savdosi topilmadi.</p>}
             </div>
           </>
         )}
