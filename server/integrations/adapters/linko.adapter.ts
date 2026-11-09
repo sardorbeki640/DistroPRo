@@ -268,6 +268,7 @@ export class LinkoAdapter implements IntegrationAdapter {
         returnAmount: Math.max(0, Number(o.total_return_price) || 0),
         status: LinkoAdapter.orderStatus(o.status),
         orderDate: String(o.created_date || '').slice(0, 10),
+        createdDate: String(o.created_date || '').slice(0, 10),
         deliveryDate: String(o.date_delivery || '').slice(0, 10) || undefined,
         itemsCount: items ? items.reduce((s, i) => s + i.quantity, 0) : 0,
         agentName: LinkoAdapter.personName(o.user) || undefined,

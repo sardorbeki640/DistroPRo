@@ -16,6 +16,8 @@ export interface ExternalSyncOrder {
   returnAmount?: number;   // goods returned against this order (SalesDoc totalReturnsSumma)
   status: string;
   orderDate: string;
+  /** Calendar date the order was created in the source system (independent of delivery/document dates). */
+  createdDate?: string;
   deliveryDate?: string;
   itemsCount: number;
   agentName?: string;
@@ -150,7 +152,7 @@ export interface IntegrationAdapter {
     details?: any;
   }>;
   // withItems:false skips order lines (slow on some systems); byDelivery filters by delivery date (cash register day).
-  importOrders(config: Record<string, any>, options?: { dateFrom?: string; dateTo?: string; status?: number[]; withItems?: boolean; byDelivery?: boolean }): Promise<ExternalSyncOrder[]>;
+  importOrders(config: Record<string, any>, options?: { dateFrom?: string; dateTo?: string; status?: number[]; withItems?: boolean; byDelivery?: boolean; byCreatedDate?: boolean }): Promise<ExternalSyncOrder[]>;
   importCustomers(config: Record<string, any>): Promise<ExternalSyncCustomer[]>;
   importPayments(config: Record<string, any>): Promise<ExternalSyncPayment[]>;
   importProducts?(config: Record<string, any>): Promise<any[]>;

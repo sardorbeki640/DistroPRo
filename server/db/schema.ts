@@ -771,6 +771,8 @@ export interface SalesOrder {
   external_id?: string | null;
   order_number: string;
   order_date: string; // YYYY-MM-DD
+  /** Original order creation date from the distributor; used for campaign date windows. */
+  creation_date?: string | null;
   delivery_date?: string | null;
   customer_id: string;
   customer_name: string;

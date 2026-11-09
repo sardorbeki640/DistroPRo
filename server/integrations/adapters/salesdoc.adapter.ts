@@ -884,10 +884,10 @@ export class SalesDocAdapter implements IntegrationAdapter {
    */
   public async importOrders(
     config: Record<string, any>, 
-    options?: { dateFrom?: string; dateTo?: string; status?: number[] }
+    options?: { dateFrom?: string; dateTo?: string; status?: number[]; byCreatedDate?: boolean }
   ): Promise<ExternalSyncOrder[]> {
     const period = {
-      [config.order_date_field === 'dateLoad' ? 'dateLoad' : 'date']: {
+      [!options?.byCreatedDate && config.order_date_field === 'dateLoad' ? 'dateLoad' : 'date']: {
         from: options?.dateFrom || config.history_start_date || '2000-01-01',
         to: options?.dateTo || businessToday()
       }
@@ -945,6 +945,9 @@ export class SalesDocAdapter implements IntegrationAdapter {
             status,
             // Same field the period filter uses, so every order lands inside the date chunk it was requested for.
             orderDate: String((config.order_date_field === 'dateLoad' ? o.dateLoad : o.date) || o.dateDocument || o.dateCreate || o.orderCreated || '').slice(0, 10),
+            // Loyalty and other order-created reports must never use dateLoad (delivery/document date).
+            createdDate: String(o.date || o.dateCreate || o.orderCreated || o.dateDocument || '').slice(0, 10),
+            deliveryDate: String(o.dateLoad || '').slice(0, 10) || undefined,
             itemsCount: items.length > 0 ? items.reduce((s, i) => s + i.quantity, 0) : (Array.isArray(o.orderProducts) ? o.orderProducts.length : 1),
             agentName,
             agentCode,

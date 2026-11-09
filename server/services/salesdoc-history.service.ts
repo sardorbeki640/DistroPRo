@@ -402,7 +402,7 @@ export class SalesDocHistoryService {
    */
   static async fetchRange(adapter: HistoryAdapter, config: Record<string, any>, from: string, to: string, withItems = true): Promise<ExternalSyncOrder[]> {
     try {
-      return await adapter.importOrders(config, { dateFrom: from, dateTo: to, status: [1, 2, 3, 4, 5], withItems });
+      return await adapter.importOrders(config, { dateFrom: from, dateTo: to, status: [1, 2, 3, 4, 5], withItems, byCreatedDate: true });
     } catch (err: any) {
       const transientGateway = /HTTP 502|HTTP 503|HTTP 504|Bad Gateway|gateway timeout/i.test(err.message);
       if (transientGateway || /tarmoq xatosi|vaqti tugadi/i.test(err.message)) {
@@ -410,7 +410,7 @@ export class SalesDocHistoryService {
         // also keeps a large month from repeatedly overwhelming the provider.
         for (let attempt = 0; attempt < 2; attempt++) {
           await new Promise(resolve => setTimeout(resolve, 1200 * (attempt + 1)));
-          try { return await adapter.importOrders(config, { dateFrom: from, dateTo: to, status: [1, 2, 3, 4, 5], withItems }); }
+          try { return await adapter.importOrders(config, { dateFrom: from, dateTo: to, status: [1, 2, 3, 4, 5], withItems, byCreatedDate: true }); }
           catch (retryError: any) { err = retryError; }
         }
       }
@@ -810,7 +810,8 @@ export class SalesDocHistoryService {
         const row: SalesOrder = {
           ...(old || { created_by: userId, created_at: now }),
           id, company_id: companyId, external_id: order.externalId, order_number: order.orderNumber,
-          order_date: order.orderDate, delivery_date: order.deliveryDate || order.orderDate, customer_id: customer.id, customer_name: customer.name,
+          order_date: order.orderDate, creation_date: order.createdDate || old?.creation_date || null,
+          delivery_date: order.deliveryDate || order.orderDate, customer_id: customer.id, customer_name: customer.name,
           agent_id: order.agentCode ? agentByCode.get(String(order.agentCode)) || null : old?.agent_id || null,
           external_agent_code: order.agentCode || null,
           expeditor_name: order.expeditorName?.trim() || old?.expeditor_name || null,

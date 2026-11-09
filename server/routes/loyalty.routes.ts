@@ -81,16 +81,16 @@ export function buildResults(program: LoyaltyProgram, liveOrders?: ExternalSyncO
   };
   const orders = liveOrders
     ? liveOrders.filter(order => isEligibleOrder(order.status)
-      && order.orderDate.slice(0, 10) >= start
-      && order.orderDate.slice(0, 10) <= end)
+      && (order.createdDate || order.orderDate).slice(0, 10) >= start
+      && (order.createdDate || order.orderDate).slice(0, 10) <= end)
       .map(order => ({ id: order.externalId, customer_id: order.customerCode, customer_name: order.customerName,
         agent_id: order.agentCode || '', agent_name: order.agentName || '', expeditor_name: order.expeditorName || '', net_sales: order.totalAmount,
-        status: order.status, order_date: order.orderDate }))
+        status: order.status, order_date: order.createdDate || order.orderDate }))
     : db.find('sales_orders', order => order.company_id === companyId
       && order.status !== 'CANCELLED'
       && isEligibleOrder(order.external_status || order.status)
-      && order.order_date.slice(0, 10) >= start
-      && order.order_date.slice(0, 10) <= end
+      && (order.creation_date || order.order_date).slice(0, 10) >= start
+      && (order.creation_date || order.order_date).slice(0, 10) <= end
       && matchesIntegrationSource(order, integrationId)).map(order => ({ ...order, agent_name: '' }));
   const orderIds = new Set(orders.map(order => order.id));
   const itemsByOrder = new Map<string, SalesOrderItem[]>();
