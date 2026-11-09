@@ -224,6 +224,7 @@ router.get('/config/:provider', requireAuth, requirePermission('integration', 'v
         purchase_price_type_id: cfg.purchase_price_type_id || '',
         sync_interval: cfg.sync_interval || '1h',
         auto_sync: cfg.auto_sync !== false,
+        auto_history_sync: cfg.auto_history_sync === true,
         status: integrationRecord.status,
         integration_id: integrationRecord.id,
         connection_name: cfg.connection_name || '',
@@ -293,7 +294,8 @@ router.post('/config', requireAuth, requirePermission('integration', 'create'), 
       branch_code: (branch_code || '').trim(),
       database_name: (database_name || '').trim(),
       sync_interval: sync_interval || '1h',
-      auto_sync: auto_sync !== false
+      auto_sync: auto_sync !== false,
+      auto_history_sync: req.body.auto_history_sync === true
     };
     // These fields are always present in the settings form. An empty value clears
     // the old selection; a non-empty value replaces it on the very same record.
@@ -621,6 +623,37 @@ router.get('/:provider/summary', requireAuth, requirePermission('integration', '
   }
 });
 
+async function startStoredHistory(companyId: string, userId: string, integration: Integration, adapter: any) {
+  if (SalesDocHistoryService.isRunning(integration.id)) return { started: false, already_running: true };
+
+  // Persist the opt-in before starting the asynchronous importer. If Turso rejects
+  // writes, don't start a job that can only populate this process's memory.
+  const previousConfig = integration.config || {};
+  const enabling = previousConfig.auto_history_sync !== true;
+  if (enabling) db.update('integrations', integration.id, { config: { ...previousConfig, auto_history_sync: true } });
+  try {
+    // Always drain pending writes from the just-finished directory sync too.
+    await db.flushTurso();
+  } catch (error) {
+    if (enabling) {
+      db.update('integrations', integration.id, { config: previousConfig });
+    }
+    throw error;
+  }
+
+  try {
+    const result = SalesDocHistoryService.start(companyId, integration.id, userId, 'full', adapter);
+    return { ...result, already_running: false };
+  } catch (error) {
+    // Restore the prior preference if the job could not be launched.
+    if (previousConfig.auto_history_sync !== true) {
+      db.update('integrations', integration.id, { config: previousConfig });
+      await db.flushTurso().catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
 router.post('/sync', requireAuth, requirePermission('integration', 'create'), async (req: Request, res: Response, next) => {
   try {
     const { provider_name, integration_id } = req.body;
@@ -638,12 +671,66 @@ router.post('/sync', requireAuth, requirePermission('integration', 'create'), as
     );
     const syncedIntegration = db.findOne('integrations', i => i.company_id === req.user!.companyId && i.provider_name.toUpperCase() === String(provider_name).toUpperCase() && (!integration_id || i.id === integration_id));
     if (syncedIntegration && result.status !== 'FAILED') tagIntegrationRows(syncedIntegration.id);
-
+    // Make the catalog sync durable before starting a long background history job.
     await db.flushTurso();
+
+    // A manual sync must make data available to the finance modules, not only
+    // refresh the provider's product/customer directory.
+    let history: { started: boolean; already_running?: boolean } | undefined;
+    if (syncedIntegration && result.status !== 'FAILED') {
+      const distribution = distributionFor(req.user!.companyId, provider_name, syncedIntegration.id);
+      if (distribution?.capabilities.history) {
+        history = await startStoredHistory(req.user!.companyId, req.user!.userId, syncedIntegration, distribution.adapter);
+      }
+    }
     res.json({
       success: true,
-      result
+      result: history ? {
+        ...result,
+        details: {
+          ...(result.details || {}),
+          history: {
+            ...history,
+            message: history.already_running
+              ? 'Buyurtmalar tarixi avvaldan yuklanmoqda.'
+              : 'Buyurtmalar tarixi barcha bo‘limlar uchun yuklanmoqda.'
+          }
+        }
+      } : result
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Start a resumable SalesDoctor/Linko history import so every module can use shared stored orders. */
+router.post('/:provider/history/start', requireAuth, requirePermission('integration', 'create'), async (req: Request, res: Response, next) => {
+  try {
+    const companyId = req.user!.companyId;
+    const integrationId = String(req.body?.integration_id || '');
+    const distribution = distributionFor(companyId, req.params.provider, integrationId || undefined);
+    if (!distribution) { res.status(404).json({ success: false, error: 'Faol server ulanishi topilmadi.' }); return; }
+    if (!distribution.capabilities.history) { res.status(400).json({ success: false, error: `${distribution.name} buyurtmalar tarixini yuklashni qo‘llamaydi.` }); return; }
+    if (SalesDocHistoryService.isRunning(distribution.integration.id)) {
+      res.status(409).json({ success: false, error: 'Buyurtmalar tarixi allaqachon yuklanmoqda.' });
+      return;
+    }
+
+    // An explicit full-history request also enables resumable background updates.
+    const integration = distribution.integration;
+    const started = await startStoredHistory(companyId, req.user!.userId, integration, distribution.adapter);
+    AuditService.log({
+      company_id: companyId,
+      user_id: req.user!.userId,
+      user_email: req.user!.email,
+      action: 'SYNC',
+      entity: 'IntegrationHistory',
+      entity_id: integration.id,
+      old_value: null,
+      new_value: { provider: integration.provider_name, history_start_date: integration.config?.history_start_date || null },
+      reason: `${distribution.name} buyurtmalar tarixi barcha bo‘limlar uchun yuklash boshlandi`
+    });
+    res.status(202).json({ success: true, ...started, integration_id: integration.id, message: `${distribution.name} buyurtmalar tarixi yuklash boshlandi. Yuklangan qismi bo‘limlarda ko‘rinadi; sahifa holati yangilanib turadi.` });
   } catch (err) {
     next(err);
   }

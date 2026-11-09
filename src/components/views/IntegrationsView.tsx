@@ -52,6 +52,7 @@ interface IntegrationConfigState {
   database_name: string;
   sync_interval: string;
   auto_sync: boolean;
+  auto_history_sync: boolean;
   history_start_date?: string;
   has_token?: boolean;     // a secret is stored on the server; it is never sent back to the browser
   has_password?: boolean;
@@ -109,7 +110,8 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
     branch_code: '',
     database_name: '',
     sync_interval: '1h',
-    auto_sync: true
+    auto_sync: true,
+    auto_history_sync: false
   });
 
   // Target SFA & Server Systems
@@ -207,6 +209,7 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
   const [history, setHistory] = useState<any>(null);
   const [stockoutHistory, setStockoutHistory] = useState<any>(null);
   const [historyRunning, setHistoryRunning] = useState(false);
+  const [historyStarting, setHistoryStarting] = useState(false);
   const [historyPoll, setHistoryPoll] = useState(false);
   const withHistory = integrations.filter(i => i.capabilities?.history);
   const activeHistoryRecords = withHistory.filter(i => i.status === 'CONNECTED' && !i.disabled);
@@ -243,6 +246,22 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
     }, 15000);
     return () => clearInterval(timer);
   }, [historyPoll, historyProvider, historyRecord?.id]);
+
+  const handleStartHistory = async () => {
+    if (!historyProvider || !historyRecord?.id || historyRunning || historyStarting) return;
+    setHistoryStarting(true);
+    setStatusMessage(null);
+    try {
+      const result = await api.startIntegrationHistory(historyProvider, historyRecord.id);
+      setHistoryPoll(true);
+      await loadHistory();
+      setStatusMessage({ type: 'success', text: result.message || `${historyName} buyurtmalar tarixi yuklanmoqda.` });
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Buyurtmalar tarixini yuklashni boshlash imkoni bo‘lmadi.' });
+    } finally {
+      setHistoryStarting(false);
+    }
+  };
 
   const getSavedRecord = (providerName: string): IntegrationRecord | undefined => {
     const records = integrations.filter(i => i.provider_name.toUpperCase() === providerName.toUpperCase());
@@ -314,7 +333,8 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
           branch_code: c.branch_code || '',
           database_name: c.database_name || '',
           sync_interval: c.sync_interval || '1h',
-          auto_sync: c.auto_sync !== false
+          auto_sync: c.auto_sync !== false,
+          auto_history_sync: c.auto_history_sync === true
         });
       } else {
         setConfigForm({
@@ -330,7 +350,8 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
           branch_code: '',
           database_name: '',
           sync_interval: '1h',
-          auto_sync: true
+          auto_sync: true,
+          auto_history_sync: false
         });
       }
     } catch {
@@ -346,7 +367,8 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
         branch_code: '',
         database_name: '',
         sync_interval: '1h',
-        auto_sync: true
+        auto_sync: true,
+        auto_history_sync: false
       });
     }
 
@@ -486,6 +508,8 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
         type: r.status === 'FAILED' || hasWarnings ? 'error' : 'success',
         text: r.details?.background
           ? `${label}: ${r.details.message}`
+          : r.details?.history?.message
+            ? `${label}: ${r.details.history.message}`
           : r.status === 'FAILED'
             ? `${label}: sinxronlanmadi. ${(r.errors || []).join('; ')}`
             : hasWarnings
@@ -586,9 +610,10 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
         <div className={`rounded-2xl border p-5 shadow-xs ${history?.complete ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-300 bg-amber-50'}`}>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="text-xs space-y-1">
-              <h2 className="text-sm font-bold text-neutral-900">{historyName} buyurtmalar tarixi · jonli so‘rov</h2>
-              <p className="font-semibold text-emerald-800">Prognoz ochilganda kerakli sana oralig‘i {historyName} tizimidan olinadi; yangi buyurtmalar bazaga ko‘chirilmaydi. Takroriy so‘rovlar qisqa muddat xotirada keshlanadi.</p>
-              {history && <p className="text-neutral-600">Bazadagi avvalgi nusxa: {history.start || history.from || 'sana ko‘rsatilmagan'} — {history.to || '—'} · {history.orders || 0} ta buyurtma · {history.status || 'mavjud'}</p>}
+              <h2 className="text-sm font-bold text-neutral-900">{historyName} buyurtmalar tarixi · barcha bo‘limlar</h2>
+              <p className="font-semibold text-neutral-700">Tarix bir marta bazaga yuklangach, hisobotlar, mijozlar balansi, agent KPI va boshqa bo‘limlar shu ma’lumotdan foydalanadi. Yuklash sana bo‘yicha bo‘lib bajariladi va uzilsa davom ettiradi.</p>
+              {history && <p className="text-neutral-600">Qamrov: {history.start || history.from || 'aniqlanmoqda'} — {history.to || '—'} · {history.orders || 0} ta buyurtma · holati: {history.status || 'mavjud'}</p>}
+              {historyRunning && <p className="font-semibold text-blue-800">Yuklanmoqda: {history.current || 'tayyorlanmoqda'} · {history.months_done || 0}/{history.months_total || '—'} oy</p>}
               {history && (
                 <p className="text-neutral-600">
                   Birinchi buyurtma: {history.first_order || '—'} · O‘tkazib yuborilgan (mijoz yoki sanasi yo‘q): {history.skipped || 0}
@@ -608,7 +633,14 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
                 </p>
               )}
             </div>
-            <span className="px-3 py-2 text-xs font-semibold text-emerald-800 bg-emerald-100 rounded-lg shrink-0">Faqat so‘rovda olinadi</span>
+            <div className="flex shrink-0 flex-col items-start gap-2 md:items-end">
+              <span className={`rounded-lg px-3 py-2 text-xs font-semibold ${historyRunning ? 'bg-blue-100 text-blue-800' : history?.complete ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}`}>
+                {historyRunning ? 'Tarix yuklanmoqda' : history?.complete ? 'To‘liq tarix bazada' : history?.status === 'FAILED' ? 'Yuklashda xato' : 'Tarix hali bazaga yuklanmagan'}
+              </span>
+              <button type="button" onClick={() => void handleStartHistory()} disabled={historyRunning || historyStarting} className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-800 disabled:cursor-wait disabled:opacity-60">
+                {historyStarting ? 'Boshlanmoqda…' : historyRunning ? 'Yuklanmoqda…' : history?.complete ? 'Tarixni yangilash' : history?.status === 'PARTIAL' || history?.status === 'FAILED' ? 'Tarixni davom ettirish' : 'To‘liq tarixni yuklash'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1150,6 +1182,17 @@ export const IntegrationsView: React.FC<IntegrationsViewProps> = ({ onNavigate, 
                     </span>
                   </label>
                 </div>
+                {(selectedSystem?.provider_name === 'SALESDOC' || selectedSystem?.provider_name === 'LINKO' || getSavedRecord(configForm.provider_name)?.capabilities?.history) && (
+                  <div className="flex items-start pt-5">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input type="checkbox" checked={configForm.auto_history_sync} onChange={e => setConfigForm(prev => ({ ...prev, auto_history_sync: e.target.checked }))} className="mt-0.5 h-4 w-4 rounded border-neutral-300 text-blue-600 focus:ring-blue-500" />
+                      <span className="text-xs font-semibold text-neutral-800">Buyurtmalar tarixini barcha bo‘limlar uchun yuklash va yangilab borish</span>
+                    </label>
+                  </div>
+                )}
+                {(selectedSystem?.provider_name === 'SALESDOC' || selectedSystem?.provider_name === 'LINKO' || getSavedRecord(configForm.provider_name)?.capabilities?.history) && (
+                  <p className="text-xs text-neutral-600 sm:col-span-2">Yoqilganda buyurtma tarixi Tanlangan sanadan boshlab bazaga saqlanadi; hisobotlar, balanslar va KPI shu ma’lumotdan foydalanadi. Birinchi yuklash uzoq davom etishi mumkin, uzilib qolsa davom ettiradi.</p>
+                )}
               </div>
 
               {/* Diagnostic Box from Live Test */}

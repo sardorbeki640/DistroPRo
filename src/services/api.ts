@@ -236,6 +236,7 @@ export const api = {
   refreshCashOrders: (id:string):Promise<any> => fetchApi('/api/cash/days/'+id+'/sync-orders',{method:'POST'}),
   getExchangeRate: (date?: string): Promise<{ rate: number | null; date: string; error?: string }> => fetchApi('/api/cash/exchange-rate' + (date ? '?date=' + encodeURIComponent(date) : '')),
   getSalesDocHistoryStatus: (provider?: string, integrationId?: string): Promise<{ configured: boolean; running?: boolean; history: any; stockout_history?: any; system?: string }> => fetchApi(`/api/integrations/${encodeURIComponent(provider || 'active')}/history-status${integrationId ? `?integration_id=${encodeURIComponent(integrationId)}` : ''}`),
+  startIntegrationHistory: (provider: string, integrationId: string): Promise<{ success: boolean; message: string }> => fetchApi(`/api/integrations/${encodeURIComponent(provider)}/history/start`, { method: 'POST', body: JSON.stringify({ integration_id: integrationId }) }),
   /** The connected distribution system (any: SalesDoctor, Linko, …): its name and what it can do. */
   getActiveDistribution: (): Promise<{ active: DistributionSystem | null; systems: (DistributionSystem & { status: string; disabled: boolean })[] }> => fetchApi('/api/integrations/active'),
   getSalesDocPriceTypes: (provider = 'active', integrationId?: string): Promise<{ system?: string; priceTypes: { id: string; name: string; kind: 'sale' | 'purchase'; active: boolean; currency?: string | null }[]; selected: { sale: string[]; purchase: string }; used: { sale: string | null; purchase: string | null } }> => fetchApi(`/api/integrations/${encodeURIComponent(provider)}/price-types${integrationId ? `?integration_id=${encodeURIComponent(integrationId)}` : ''}`),
@@ -1228,6 +1229,7 @@ export const api = {
     database_name?: string;
     sync_interval?: string;
     auto_sync?: boolean;
+    auto_history_sync?: boolean;
     history_start_date?: string;
     forecast_days?: number;
   }): Promise<{ success: boolean; connected?: boolean; message: string; integration_id: string; connection_name?: string }> => {

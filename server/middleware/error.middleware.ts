@@ -25,6 +25,14 @@ export const errorHandler = (
   // Missing Sheets setup is an actionable configuration problem, not a server crash.
   // Keep the instruction visible to the user instead of disguising it as HTTP 500.
   const message = String(err?.message || '');
+  if (/SQL write operations are forbidden|BLOCKED.*write operations/i.test(message)) {
+    res.status(503).json({
+      success: false,
+      error: 'Ma’lumotlar bazasi yozuvlarni vaqtincha rad etdi. SalesDoctor ma’lumotlari olinishi mumkin, lekin bazaga saqlanmayapti. Turso bazasining yozish limiti yoki rejasini tekshiring.',
+      errorCode: 'DATABASE_WRITE_BLOCKED'
+    });
+    return;
+  }
   if (message.includes('Google Sheets ulanishini yoqing') || message.includes('Sheets ulanishi sozlanmagan')) {
     res.status(400).json({
       success: false,

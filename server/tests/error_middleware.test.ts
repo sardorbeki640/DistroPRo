@@ -26,3 +26,11 @@ test('known client errors keep their status and useful message', () => {
   assert.equal(res.statusCode, 422);
   assert.equal(res.body.error, 'Noto‘g‘ri miqdor');
 });
+
+test('blocked Turso writes return an actionable 503 instead of a generic server error', () => {
+  const res = response();
+  errorHandler(new Error('BLOCKED: Operation was blocked: SQL write operations are forbidden (writes are blocked, do you need to upgrade your plan?)'), {} as Request, res as unknown as Response, () => {});
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.body.errorCode, 'DATABASE_WRITE_BLOCKED');
+  assert.match(res.body.error, /Turso bazasining yozish limiti/);
+});
