@@ -152,16 +152,17 @@ export function buildResults(program: LoyaltyProgram, liveOrders?: ExternalSyncO
   }).sort((a, b) => b.value - a.value || a.customer.localeCompare(b.customer, 'uz'));
   const totalValue = rows.reduce((sum, row) => sum + row.value, 0);
   const expectsKilograms = program.metric === 'QUANTITY' && program.terms.some(term => /kilogram|kilogramm|\bkg\b/i.test(term));
-  const calculationWarning = expectsKilograms && normalizeUnit(program.unit) !== 'kg'
-    ? `Aksiya shartida kg ko‘rsatilgan, lekin dastur ${program.unit} bo‘yicha hisoblayapti. Sovg‘a shartlari birliklar moslanguncha hisoblanmaydi.`
-    : productUnitsMismatch ? 'Aksiya o‘lchov birligi tanlangan mahsulot birligiga mos emas. Sovg‘a shartlari birliklar moslanguncha hisoblanmaydi.' : null;
+  const calculationWarning = productUnitsMismatch ? 'Aksiya o‘lchov birligi tanlangan mahsulot birligiga mos emas. Sovg‘a shartlari birliklar moslanguncha hisoblanmaydi.' : null;
+  const calculationNote = expectsKilograms && normalizeUnit(program.unit) === 'dona'
+    ? 'Ushbu aksiya uchun 1 dona = 1 kg deb olinadi. Shuning uchun kg chegaralari dona miqdoriga 1:1 mos hisoblanadi.'
+    : null;
   if (calculationWarning) for (const row of rows) {
     row.earned_reward = null; row.next_reward = null; row.next_threshold = null; row.remaining = null;
   }
   const earned = calculationWarning ? [] : rows.filter(row => row.earned_reward);
   const rewardCounts = [...new Set(tiers.map(tier => tier.reward))]
     .map(reward => ({ reward, count: earned.filter(row => row.earned_reward === reward).length }));
-  return { rows, summary: { customers: rows.length, qualified: earned.length, orders: rows.reduce((sum, row) => sum + row.order_count, 0), total_value: totalValue, reward_counts: rewardCounts }, calculation_warning: calculationWarning, computed_from: liveOrders ? `${sourceName || 'Ulangan tizim'}dan jonli olingan yetkazilgan savdolar` : `${sourceName || 'DistroPro'} bazasidagi yetkazilgan savdolar` };
+  return { rows, summary: { customers: rows.length, qualified: earned.length, orders: rows.reduce((sum, row) => sum + row.order_count, 0), total_value: totalValue, reward_counts: rewardCounts }, calculation_warning: calculationWarning, calculation_note: calculationNote, computed_from: liveOrders ? `${sourceName || 'Ulangan tizim'}dan jonli olingan yetkazilgan savdolar` : `${sourceName || 'DistroPro'} bazasidagi yetkazilgan savdolar` };
 }
 
 router.use(requireAuth);
@@ -198,7 +199,7 @@ router.get('/agents/:agentId/results', requirePermission('reports', 'view'), (re
       // Always group by agent for the profile, even when the campaign overview is grouped by customer only.
       const result = buildResults({ ...program, group_by_agent: true }, undefined, connected?.name || 'DistroPro', integrationId);
       return result.rows.filter(row => row.agent_id === agent.id).map(row => ({
-        ...row, calculation_warning: result.calculation_warning, program_id: program.id, program_name: program.name, metric: program.metric, unit: program.unit,
+        ...row, calculation_warning: result.calculation_warning, calculation_note: result.calculation_note, program_id: program.id, program_name: program.name, metric: program.metric, unit: program.unit,
         start_date: program.start_date, end_date: program.end_date, is_active: program.is_active
       }));
     }).sort((a, b) => Number(b.is_active) - Number(a.is_active) || b.value - a.value || a.customer.localeCompare(b.customer, 'uz'));

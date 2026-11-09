@@ -8,7 +8,7 @@ type Product = { id: string; sku?: string; name: string; unit: string; external_
 type Tier = { id: string; threshold: number; reward: string };
 type Draft = Omit<LoyaltyProgram, 'id' | 'company_id' | 'created_at' | 'updated_at' | 'archived_at'>;
 type ResultRow = { customer_id: string; customer: string; agent: string; value: number; order_count: number; earned_reward: string | null; next_reward: string | null; next_threshold: number | null; remaining: number | null };
-type ResultData = { rows: ResultRow[]; summary: { customers: number; qualified: number; orders: number; total_value: number; reward_counts: { reward: string; count: number }[] }; calculation_warning?: string | null; computed_from: string };
+type ResultData = { rows: ResultRow[]; summary: { customers: number; qualified: number; orders: number; total_value: number; reward_counts: { reward: string; count: number }[] }; calculation_warning?: string | null; calculation_note?: string | null; computed_from: string };
 
 const sheetTiers: Tier[] = [
   ['TEFAL', 40], ['CHOPPER', 55], ['QUYOSH ISITGICH', 65], ['TAROZI 30 KG', 85], ['DAZMOL', 110], ['TAROZI 200 KG', 140],
@@ -252,8 +252,7 @@ export const LoyaltyView: React.FC<{ user: AuthUser | null }> = ({ user }) => {
           </div>
 
           {selected.terms.length > 0 && <details className="group rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3"><summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-xs font-semibold text-amber-900"><span className="flex items-center gap-2"><Settings2 size={14}/> Aksiya shartlari ({selected.terms.length})</span><ChevronDown size={15} className="transition group-open:rotate-180"/></summary><ol className="mt-3 list-decimal space-y-1.5 pl-5 text-xs leading-5 text-amber-950">{selected.terms.map((term, index) => <li key={`${selected.id}-term-${index}`}>{term}</li>)}</ol></details>}
-          {selected.metric === 'QUANTITY' && selected.terms.some(term => /kilogram|kilogramm|\bkg\b/i.test(term)) && normalizeUnit(selected.unit) !== 'kg' && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs leading-5 text-rose-800"><b>Birlik mos emas:</b> aksiya shartlarida kilogramm yozilgan, lekin dastur {selected.unit} bo‘yicha hisoblayapti. Tahrirlashda kg o‘lchovli mahsulotni tanlang; dona mahsulot uchun kg↔dona konversiyasi kerak.</div>}
-
+          {results?.calculation_note && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs leading-5 text-emerald-800">{results.calculation_note}</div>}
           {results?.calculation_warning && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs leading-5 text-rose-800"><b>Hisoblash to‘xtatildi:</b> {results.calculation_warning}</div>}
           <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
             <div className="flex flex-col gap-2 border-b border-neutral-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="text-sm font-bold text-neutral-800">Mijozlar natijasi</h3><p className="mt-0.5 text-[11px] text-neutral-500">Hisoblash oralig‘i aksiya sanalari bilan bir xil. Faqat “Yetkazilgan” buyurtmalar kiradi.</p></div><div className="flex items-center gap-2"><span className="text-xs text-neutral-500">{results?.summary.qualified ?? 0} ta shartni bajargan</span><button onClick={() => void load()} title="Hisobotni yangilash" className="rounded-lg border border-neutral-200 p-2 text-neutral-600 hover:bg-neutral-50"><RefreshCw size={14}/></button></div></div>
