@@ -70,15 +70,18 @@ export function buildResults(program: LoyaltyProgram, liveOrders?: ExternalSyncO
   const companyId = program.company_id;
   const start = program.start_date;
   const end = program.end_date;
+  const excludedLoyaltyStatuses = new Set(['CANCELLED', 'CANCELED', 'CANCEL', 'RETURNED', 'RETURN', 'REFUNDED', 'REFUND']);
+  const isEligibleOrder = (status: string | null | undefined) => !excludedLoyaltyStatuses.has(String(status || '').trim().toUpperCase());
   const orders = liveOrders
-    ? liveOrders.filter(order => order.status === 'DELIVERED'
+    ? liveOrders.filter(order => isEligibleOrder(order.status)
       && order.orderDate.slice(0, 10) >= start
       && order.orderDate.slice(0, 10) <= end)
       .map(order => ({ id: order.externalId, customer_id: order.customerCode, customer_name: order.customerName,
         agent_id: order.agentCode || '', agent_name: order.agentName || '', expeditor_name: order.expeditorName || '', net_sales: order.totalAmount,
-        status: 'DELIVERED' as const, order_date: order.orderDate }))
+        status: order.status, order_date: order.orderDate }))
     : db.find('sales_orders', order => order.company_id === companyId
-      && order.status === 'DELIVERED'
+      && order.status !== 'CANCELLED'
+      && isEligibleOrder(order.external_status || order.status)
       && order.order_date.slice(0, 10) >= start
       && order.order_date.slice(0, 10) <= end
       && matchesIntegrationSource(order, integrationId)).map(order => ({ ...order, agent_name: '' }));
@@ -162,7 +165,7 @@ export function buildResults(program: LoyaltyProgram, liveOrders?: ExternalSyncO
   const earned = calculationWarning ? [] : rows.filter(row => row.earned_reward);
   const rewardCounts = [...new Set(tiers.map(tier => tier.reward))]
     .map(reward => ({ reward, count: earned.filter(row => row.earned_reward === reward).length }));
-  return { rows, summary: { customers: rows.length, qualified: earned.length, orders: rows.reduce((sum, row) => sum + row.order_count, 0), total_value: totalValue, reward_counts: rewardCounts }, calculation_warning: calculationWarning, calculation_note: calculationNote, computed_from: liveOrders ? `${sourceName || 'Ulangan tizim'}dan jonli olingan yetkazilgan savdolar` : `${sourceName || 'DistroPro'} bazasidagi yetkazilgan savdolar` };
+  return { rows, summary: { customers: rows.length, qualified: earned.length, orders: rows.reduce((sum, row) => sum + row.order_count, 0), total_value: totalValue, reward_counts: rewardCounts }, calculation_warning: calculationWarning, calculation_note: calculationNote, computed_from: liveOrders ? `${sourceName || 'Ulangan tizim'}dan olingan (bekor/qaytarilganlardan tashqari) savdolar` : `${sourceName || 'DistroPro'} bazasidagi (bekor/qaytarilganlardan tashqari) savdolar` };
 }
 
 router.use(requireAuth);

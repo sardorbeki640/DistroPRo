@@ -348,6 +348,7 @@ export class IntegrationProvider {
           gross_profit: cogs.status === 'KNOWN' ? ord.totalAmount - cogs.total : 0,
           payment_type: 'CREDIT' as const,
           status,
+          external_status: ord.status || existingOrder?.external_status || null,
           source: 'DISTRIBUTION' as const,
           ...(integrationRecord ? { source_integration_id: integrationRecord.id } : {}),
           updated_at: now

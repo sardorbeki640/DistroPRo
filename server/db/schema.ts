@@ -789,6 +789,8 @@ export interface SalesOrder {
   gross_profit: number; // net_sales - total_cogs
   payment_type: 'CASH' | 'TERMINAL' | 'CLICK' | 'BANK_TRANSFER' | 'CREDIT' | 'SPLIT';
   status: 'DELIVERED' | 'PENDING' | 'CANCELLED';
+  /** Original status from the connected distribution system, retained for rules that need more than delivered/pending. */
+  external_status?: string | null;
   source: 'MANUAL' | 'EXCEL' | 'DISTRIBUTION';
   created_by?: string;
   created_at: string;

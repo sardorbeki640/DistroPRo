@@ -816,7 +816,7 @@ export class SalesDocHistoryService {
           expeditor_name: order.expeditorName?.trim() || old?.expeditor_name || null,
           // The distribution total is already net of returns; total_sales keeps the gross so net = total_sales − return_amount as everywhere else.
           total_sales: order.totalAmount + (order.returnAmount || 0), discount_amount: 0, return_amount: order.returnAmount || 0, net_sales: order.totalAmount,
-          total_cogs: cogsTotal, cogs_status: cogsStatus,
+          total_cogs: cogsTotal, cogs_status: cogsStatus, external_status: order.status || old?.external_status || null,
           gross_profit: cogsStatus === 'KNOWN' ? order.totalAmount - cogsTotal : 0,
           payment_type: 'CREDIT', status, source: 'DISTRIBUTION', updated_at: now,
           ...(integrationId ? { source_integration_id: integrationId } : {})

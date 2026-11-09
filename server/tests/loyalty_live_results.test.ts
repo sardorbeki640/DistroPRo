@@ -7,7 +7,7 @@ import type { ExternalSyncOrder } from '../integrations/interfaces.ts';
 
 beforeEach(() => { db.init(); db.reset(); });
 
-test('loyalty live results use delivered provider orders and selected product SKUs', () => {
+test('loyalty results include every campaign order status except cancelled and returned', () => {
   db.insert('products', { id: 'product-1', company_id: 'company-1', sku: 'd0_5', name: 'Semichka', unit: 'kg', is_active: true } as any);
   const program: LoyaltyProgram = {
     id: 'program-1', company_id: 'company-1', name: 'Semichka bonus', metric: 'QUANTITY', unit: 'kg',
@@ -19,14 +19,42 @@ test('loyalty live results use delivered provider orders and selected product SK
       { sku: 'd0_5', name: 'Semichka', quantity: 45, price: 1, total: 45 },
       { sku: 'd0_6', name: 'Boshqa', quantity: 10, price: 1, total: 10 }
     ] },
-    { externalId: 'order-2', orderNumber: '2', customerCode: 'customer-2', customerName: 'Do‘kon 2', totalAmount: 1_000_000, status: 'PENDING', orderDate: '2026-11-06', itemsCount: 100, items: [{ sku: 'd0_5', name: 'Semichka', quantity: 100, price: 1, total: 100 }] }
+    { externalId: 'order-2', orderNumber: '2', customerCode: 'customer-2', customerName: 'Do‘kon 2', totalAmount: 1_000_000, status: 'PENDING', orderDate: '2026-11-06', itemsCount: 100, items: [{ sku: 'd0_5', name: 'Semichka', quantity: 100, price: 1, total: 100 }] },
+    { externalId: 'order-3', orderNumber: '3', customerCode: 'customer-3', customerName: 'Bekor', totalAmount: 1_000_000, status: 'CANCELLED', orderDate: '2026-11-07', itemsCount: 100, items: [{ sku: 'd0_5', name: 'Semichka', quantity: 100, price: 1, total: 100 }] },
+    { externalId: 'order-4', orderNumber: '4', customerCode: 'customer-4', customerName: 'Qaytarildi', totalAmount: 1_000_000, status: 'RETURNED', orderDate: '2026-11-08', itemsCount: 100, items: [{ sku: 'd0_5', name: 'Semichka', quantity: 100, price: 1, total: 100 }] },
+    { externalId: 'order-5', orderNumber: '5', customerCode: 'customer-5', customerName: 'Oldingi aksiya', totalAmount: 1_000_000, status: 'DELIVERED', orderDate: '2026-10-31', itemsCount: 100, items: [{ sku: 'd0_5', name: 'Semichka', quantity: 100, price: 1, total: 100 }] }
   ];
 
   const result = buildResults(program, orders, 'SalesDoctor');
-  assert.equal(result.summary.orders, 1);
-  assert.equal(result.summary.customers, 1);
-  assert.equal(result.rows[0].value, 45);
-  assert.equal(result.rows[0].agent, 'Agent 1');
-  assert.equal(result.rows[0].earned_reward, 'Tefal');
+  assert.equal(result.summary.orders, 2);
+  assert.equal(result.summary.customers, 2);
+  const delivered = result.rows.find(row => row.customer === 'Do‘kon 1')!;
+  const pending = result.rows.find(row => row.customer === 'Do‘kon 2')!;
+  assert.equal(delivered.value, 45);
+  assert.equal(delivered.agent, 'Agent 1');
+  assert.equal(delivered.earned_reward, 'Tefal');
+  assert.equal(pending.value, 100);
+  assert.equal(pending.earned_reward, 'Tefal');
   assert.match(result.computed_from, /SalesDoctor/);
+});
+
+test('loyalty stored-order results include pending statuses, exclude cancellation and returns, and honor campaign dates', () => {
+  db.insert('customers', { id: 'customer-1', company_id: 'company-1', code: 'c1', name: 'Do‘kon', phone: '', address: '', credit_limit: 0, current_balance: 0, status: 'ACTIVE', is_active: true, created_at: '' } as any);
+  db.insert('agents', { id: 'agent-1', company_id: 'company-1', code: 'a1', full_name: 'Agent 1', status: 'ACTIVE' } as any);
+  for (const [id, status, external_status, order_date] of [
+    ['pending', 'PENDING', 'NEW', '2026-11-03'],
+    ['delivered', 'DELIVERED', 'DELIVERED', '2026-11-04'],
+    ['cancelled', 'CANCELLED', 'CANCELLED', '2026-11-05'],
+    ['returned', 'PENDING', 'RETURNED', '2026-11-06'],
+    ['before-start', 'DELIVERED', 'DELIVERED', '2026-11-02']
+  ]) {
+    db.insert('sales_orders', { id, company_id: 'company-1', customer_id: 'customer-1', customer_name: 'Do‘kon', agent_id: 'agent-1', order_date, total_sales: 100, net_sales: 100, discount_amount: 0, return_amount: 0, status, external_status, source: 'DISTRIBUTION' } as any);
+  }
+  const program: LoyaltyProgram = {
+    id: 'program-2', company_id: 'company-1', name: 'Aksiya', metric: 'AMOUNT', unit: 'UZS', product_ids: [], group_by_agent: true,
+    start_date: '2026-11-03', end_date: '2026-11-30', tiers: [{ id: 'tier-1', threshold: 1, reward: 'Sovg‘a' }], terms: [], is_active: true, created_by: 'owner', created_at: '2026-11-01'
+  };
+  const result = buildResults(program, undefined, 'DistroPro');
+  assert.equal(result.summary.orders, 2);
+  assert.equal(result.rows[0].value, 200);
 });
