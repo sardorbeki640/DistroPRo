@@ -71,7 +71,14 @@ export function buildResults(program: LoyaltyProgram, liveOrders?: ExternalSyncO
   const start = program.start_date;
   const end = program.end_date;
   const excludedLoyaltyStatuses = new Set(['CANCELLED', 'CANCELED', 'CANCEL', 'RETURNED', 'RETURN', 'REFUNDED', 'REFUND']);
-  const isEligibleOrder = (status: string | null | undefined) => !excludedLoyaltyStatuses.has(String(status || '').trim().toUpperCase());
+  const isEligibleOrder = (status: string | null | undefined) => {
+    const normalized = String(status || '').trim().toUpperCase();
+    // Providers may send localized or extended status labels (for example,
+    // "Отменён", "Возврат оформлен", or "CANCELLED_BY_CLIENT"). Exclude those
+    // consistently while retaining every other status, including pending ones.
+    const localizedOrExtendedExclusion = /CANCEL|RETURN|REFUND|QAYTAR|BEKOR|ВОЗВРАТ|ВОЗВРАЩ|ОТМЕН/.test(normalized);
+    return !excludedLoyaltyStatuses.has(normalized) && !localizedOrExtendedExclusion;
+  };
   const orders = liveOrders
     ? liveOrders.filter(order => isEligibleOrder(order.status)
       && order.orderDate.slice(0, 10) >= start
@@ -206,7 +213,7 @@ router.get('/agents/:agentId/results', requirePermission('reports', 'view'), (re
         start_date: program.start_date, end_date: program.end_date, is_active: program.is_active
       }));
     }).sort((a, b) => Number(b.is_active) - Number(a.is_active) || b.value - a.value || a.customer.localeCompare(b.customer, 'uz'));
-    res.json({ agent: { id: agent.id, name: agent.full_name, code: agent.code }, rows, programs: programs.length, computed_from: `${connected?.name || 'DistroPro'} bazasidagi yetkazilgan savdolar` });
+    res.json({ agent: { id: agent.id, name: agent.full_name, code: agent.code }, rows, programs: programs.length, computed_from: `${connected?.name || 'DistroPro'} bazasidagi (bekor/qaytarilganlardan tashqari) barcha statusdagi savdolar` });
   } catch (error) { next(error); }
 });
 
