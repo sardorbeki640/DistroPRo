@@ -60,7 +60,7 @@ test('history loads month by month, splits a range when SalesDoc repeats a page,
 });
 
 test('manual SalesDoctor sync refreshes live catalogs without copying order history into the database', async () => {
-  const integration = { id: 'sd-directory', company_id: 'c', provider_name: 'SALESDOC', provider_type: 'DISTRIBUTION', status: 'CONNECTED', disabled: false, config: {}, created_at: today } as any;
+  const integration = { id: 'sd-directory', company_id: 'c', provider_name: 'SALESDOC', provider_type: 'DISTRIBUTION', status: 'CONNECTED', disabled: false, config: { customers_cards_version: 4, customers_synced_at: new Date().toISOString() }, created_at: today } as any;
   db.insert('integrations', integration);
   const adapter = integrationProvider.getAdapter('SALESDOC') as SalesDocAdapter;
   const original = {

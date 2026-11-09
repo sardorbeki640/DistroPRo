@@ -493,7 +493,8 @@ export class SalesDocHistoryService {
     const cfg = db.findById('integrations', integrationId)?.config || {};
     const last = Date.parse(cfg.customers_synced_at || '') || 0;
     // A newer way of reading the cards runs at once instead of waiting a day.
-    if (cfg.customers_cards_version === CARDS_VERSION && now - last < 20 * 3600_000) return { updated: 0, skipped: true };
+    const hasImportedCustomers = db.find('customers', c => c.company_id === companyId && c.source_integration_id === integrationId).length > 0;
+    if (cfg.customers_cards_version === CARDS_VERSION && now - last < 20 * 3600_000 && (!strict || hasImportedCustomers)) return { updated: 0, skipped: true };
     let cards;
     try { cards = await adapter.importCustomers(config); } catch (err: any) {
       console.warn('[SalesDocHistory] mijozlar kartasi:', err.message);
