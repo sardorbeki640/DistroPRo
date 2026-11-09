@@ -59,6 +59,40 @@ test('history loads month by month, splits a range when SalesDoc repeats a page,
   assert.equal(db.find('sales_orders', () => true).length, totalBefore, 'no duplicates after resync');
 });
 
+test('manual SalesDoctor sync refreshes live catalogs without copying order history into the database', async () => {
+  const integration = { id: 'sd-directory', company_id: 'c', provider_name: 'SALESDOC', provider_type: 'DISTRIBUTION', status: 'CONNECTED', disabled: false, config: {}, created_at: today } as any;
+  db.insert('integrations', integration);
+  const adapter = integrationProvider.getAdapter('SALESDOC') as SalesDocAdapter;
+  const original = {
+    products: adapter.importProducts,
+    employees: adapter.importEmployees,
+    customers: adapter.importCustomers,
+    orders: adapter.importOrders,
+    payments: adapter.importPayments
+  };
+  try {
+    adapter.importProducts = async () => [{ sku: 'sku-1', name: 'Sinov mahsuloti', purchase_cost: 0, selling_price: 1000, stock_quantity: 7 }];
+    adapter.importEmployees = async () => [{ externalId: 'agent-1', code_1C: 'agent-1', name: 'Sinov agent', role: 'AGENT' } as any];
+    adapter.importCustomers = async () => [{ externalCode: 'client-1', name: 'Sinov mijoz', phone: '', address: '', balance: 0 }];
+    adapter.importOrders = async () => { throw new Error('Buyurtma tarixi bu sinxronlashda yuklanmasligi kerak'); };
+    adapter.importPayments = async () => { throw new Error('To‘lov tarixi bu sinxronlashda yuklanmasligi kerak'); };
+    const result = await integrationProvider.syncProvider('c', 'SALESDOC', 'u', 'owner@example.test', integration.id);
+    assert.equal(result.status, 'SUCCESS');
+    assert.equal(result.details?.readOnlyHistory, true);
+    assert.equal(result.details?.products, 1);
+    assert.equal(result.details?.customers, 1);
+    assert.equal(result.details?.agents, 1);
+    assert.equal(db.find('sales_orders', () => true).length, 0);
+    assert.equal(db.find('sales_order_items', () => true).length, 0);
+  } finally {
+    adapter.importProducts = original.products;
+    adapter.importEmployees = original.employees;
+    adapter.importCustomers = original.customers;
+    adapter.importOrders = original.orders;
+    adapter.importPayments = original.payments;
+  }
+});
+
 test('a failed month keeps loaded months and marks history as not complete', async () => {
   db.insert('integrations', { id: 'sd', company_id: 'c', provider_name: 'SALESDOC', status: 'CONNECTED', config: { history_start_date: addDays(today, -40) }, created_at: today } as any);
   const adapter = new SalesDocAdapter();

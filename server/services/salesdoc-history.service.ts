@@ -88,6 +88,28 @@ export class SalesDocHistoryService {
 
   static isRunning(integrationId: string) { return this.running.has(integrationId); }
 
+  /** Refresh SalesDoctor master data only. Order history is deliberately not copied to Turso. */
+  static async syncSalesDocDirectory(companyId: string, integrationId: string, adapter: SalesDocAdapter, config: Record<string, any>) {
+    const integration = db.findById('integrations', integrationId);
+    if (!integration || integration.company_id !== companyId || integration.disabled || integration.status !== 'CONNECTED') {
+      throw new Error('Faol SalesDoctor ulanishi topilmadi. Integratsiya sozlamalarini tekshiring.');
+    }
+    await this.importProducts(companyId, integrationId, adapter, config);
+    await this.importSalesDocAgents(companyId, integrationId, adapter, config);
+    const customerSync = await this.refreshCustomerCards(companyId, integrationId, adapter, config, undefined, true);
+    const products = db.find('products', p => p.company_id === companyId && p.source_integration_id === integrationId && p.is_active).length;
+    const customers = db.find('customers', c => c.company_id === companyId && c.source_integration_id === integrationId).length;
+    const agents = db.find('agents', a => a.company_id === companyId && a.source_integration_id === integrationId).length;
+    const now = new Date().toISOString();
+    db.update('integrations', integrationId, { last_sync_at: now });
+    return {
+      products, customers, agents,
+      customer_cards_updated: customerSync.updated,
+      synced_at: now,
+      message: `${products} ta mahsulot, ${customers} ta mijoz va ${agents} ta agent katalogi yangilandi. Buyurtmalar tarixi SalesDoctor’dan kerakli bo‘limda jonli olinadi, Turso’ga nusxalanmadi.`
+    };
+  }
+
   /**
    * SalesDoc's dated stock endpoint returns a full warehouse snapshot and is rate-limited to one call per five minutes.
    * Walks backwards one warehouse/request at a time, then records the last positive day for currently empty products.
@@ -467,13 +489,17 @@ export class SalesDocHistoryService {
    * Territory, phone and address of the system's customers, from its client directory. At most once a day (the
    * directory is large); a failure is only logged, it never stops the order history.
    */
-  static async refreshCustomerCards(companyId: string, integrationId: string, adapter: HistoryAdapter, config: Record<string, any>, now = Date.now()) {
+  static async refreshCustomerCards(companyId: string, integrationId: string, adapter: HistoryAdapter, config: Record<string, any>, now = Date.now(), strict = false) {
     const cfg = db.findById('integrations', integrationId)?.config || {};
     const last = Date.parse(cfg.customers_synced_at || '') || 0;
     // A newer way of reading the cards runs at once instead of waiting a day.
     if (cfg.customers_cards_version === CARDS_VERSION && now - last < 20 * 3600_000) return { updated: 0, skipped: true };
     let cards;
-    try { cards = await adapter.importCustomers(config); } catch (err: any) { console.warn('[SalesDocHistory] mijozlar kartasi:', err.message); return { updated: 0, skipped: false }; }
+    try { cards = await adapter.importCustomers(config); } catch (err: any) {
+      console.warn('[SalesDocHistory] mijozlar kartasi:', err.message);
+      if (strict) throw err;
+      return { updated: 0, skipped: false };
+    }
     const byCode = new Map(db.find('customers', c => c.company_id === companyId && !!c.code && (!c.source_integration_id || c.source_integration_id === integrationId)).map(c => [canonicalCustomerCode(c.code), c]));
     // Read the ledgers once instead of scanning the full ledger for every customer.
     const ledgerByCustomer = new Map<string, CustomerBalanceTransaction[]>();

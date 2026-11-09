@@ -6,6 +6,8 @@ import { daysBetween, isValidIsoDate } from '../utils/date.ts';
 
 const CACHE_TTL_MS = 30_000;
 const MAX_HISTORY_DAYS = 3660;
+const SALES_DOC_CHUNK_DAYS = 7;
+const SALES_DOC_MAX_PARALLEL = 3;
 type LiveResult = { integrationId: string; provider: string; from: string; to: string; fetchedAt: string; orders: ExternalSyncOrder[] };
 const cache = new Map<string, { expiresAt: number; value: LiveResult }>();
 const inflight = new Map<string, Promise<LiveResult>>();
@@ -27,20 +29,28 @@ export class LiveHistoryService {
     if (running) return running;
 
     const work = (async () => {
-      const orders = await SalesDocHistoryService.fetchRange(
-        distribution.adapter as HistoryAdapter,
-        distribution.integration.config || {},
-        from,
-        to,
-        true
-      );
+      const config = distribution.integration.config || {};
+      const adapter = distribution.adapter as HistoryAdapter;
+      const ranges: Array<{ from: string; to: string }> = [];
+      for (let start = from; start <= to;) {
+        const end = new Date(Math.min(Date.parse(to), Date.parse(`${start}T00:00:00Z`) + (SALES_DOC_CHUNK_DAYS - 1) * 86400000)).toISOString().slice(0, 10);
+        ranges.push({ from: start, to: end });
+        start = new Date(Date.parse(`${end}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+      }
+      const orders: ExternalSyncOrder[] = [];
+      for (let offset = 0; offset < ranges.length; offset += SALES_DOC_MAX_PARALLEL) {
+        const batch = ranges.slice(offset, offset + SALES_DOC_MAX_PARALLEL);
+        const results = await Promise.all(batch.map(range => SalesDocHistoryService.fetchRange(adapter, config, range.from, range.to, true)));
+        for (const group of results) orders.push(...group);
+      }
+      const uniqueOrders = [...new Map(orders.filter(order => !!order.externalId).map(order => [order.externalId, order])).values()];
       const value: LiveResult = {
         integrationId: distribution.integration.id,
         provider: distribution.name,
         from,
         to,
         fetchedAt: new Date().toISOString(),
-        orders
+        orders: uniqueOrders
       };
       cache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, value });
       return value;

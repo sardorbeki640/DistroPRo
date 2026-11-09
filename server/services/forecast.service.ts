@@ -524,8 +524,8 @@ export class ForecastService {
     let message: string;
     let syncRes: any;
     if (dist.capabilities.history) {
-      message = `${dist.name} buyurtmalar tarixi prognoz bo‘limida to‘g‘ridan-to‘g‘ri olinadi va bazaga saqlanmaydi.`;
-      syncRes = { readOnly: true, status: 'SUCCESS' };
+      syncRes = await integrationProvider.syncProvider(companyId, provider, userId, userEmail, integration.id);
+      message = syncRes.details?.message || `${dist.name} kataloglari yangilandi; buyurtmalar tarixi jonli olinadi va bazaga saqlanmaydi.`;
     } else {
       syncRes = await integrationProvider.syncProvider(companyId, provider, userId, userEmail, integration.id);
       message = syncRes.status === 'FAILED' ? `${provider} yangilanmadi: ${(syncRes.errors || []).join('; ')}` : `${provider}: ${syncRes.recordsImported} ta yozuv yangilandi, ${syncRes.recordsFailed} ta o‘tkazib yuborildi.`;

@@ -27,6 +27,7 @@ import { canonicalCustomerCode, computeOrderCogs, isPlausibleCost } from '../ser
 import { businessToday } from '../utils/date.ts';
 import { capabilitiesOf } from './capabilities.ts';
 import { territoryIdFor } from '../services/territory.ts';
+import { SalesDocHistoryService } from '../services/salesdoc-history.service.ts';
 
 /** Ledger row plus cached balance, derived from the ledger itself (never clamped at zero: overpayment is a credit). */
 function postLedger(
@@ -119,6 +120,21 @@ export class IntegrationProvider {
     if (integrationRecord?.disabled) throw new Error(`${upperProvider} o‘chirilgan. Sinxronlash uchun avval integratsiyani yoqing.`);
     // Any system that can give its order history month by month (SalesDoctor, Linko, …) loads it that way.
     if (capabilitiesOf(adapter).history && integrationRecord) {
+      if (adapter instanceof SalesDocAdapter) {
+        const directory = await SalesDocHistoryService.syncSalesDocDirectory(companyId, integrationRecord.id, adapter, config);
+        return {
+          provider: adapter.providerName,
+          status: 'SUCCESS',
+          recordsImported: directory.products + directory.customers + directory.agents,
+          recordsFailed: 0,
+          syncedAt: directory.synced_at,
+          details: {
+            directory: true,
+            ...directory,
+            readOnlyHistory: true
+          }
+        };
+      }
       return {
         provider: adapter.providerName,
         status: 'SUCCESS',
