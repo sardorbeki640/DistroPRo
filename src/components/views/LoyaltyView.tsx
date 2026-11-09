@@ -4,7 +4,7 @@ import { api } from '../../services/api.ts';
 import type { AuthUser, LoyaltyProgram } from '../../types.ts';
 import { isOwner } from '../../utils/permissions.ts';
 
-type Product = { id: string; name: string; unit: string; external_id?: string | null; source?: string; is_active: boolean };
+type Product = { id: string; sku?: string; name: string; unit: string; external_id?: string | null; source?: string; is_active: boolean };
 type Tier = { id: string; threshold: number; reward: string };
 type Draft = Omit<LoyaltyProgram, 'id' | 'company_id' | 'created_at' | 'updated_at' | 'archived_at'>;
 type ResultRow = { customer_id: string; customer: string; agent: string; value: number; order_count: number; earned_reward: string | null; next_reward: string | null; next_threshold: number | null; remaining: number | null };
@@ -38,7 +38,8 @@ function emptyDraft(): Draft {
 
 function sheetDraft(products: Product[]): Draft {
   const draft = emptyDraft();
-  const productIds = products.filter(p => ['d0_5', 'd0_6'].includes(String(p.external_id || ''))).map(p => p.id);
+  // SalesDoc imports its stable reference as sku; external_id is not populated by that adapter.
+  const productIds = products.filter(p => ['d0_5', 'd0_6'].includes(String(p.external_id || p.sku || '').trim())).map(p => p.id);
   return { ...draft, name: 'Semichka Premium — aksiya shabloni', metric: 'QUANTITY', unit: 'kg', product_ids: productIds, group_by_agent: true,
     start_date: '2026-11-03', end_date: '2026-11-30', tiers: sheetTiers.map(t => ({ ...t, id: `tier-${Date.now()}-${t.id}` })), terms: [...sheetTerms] };
 }

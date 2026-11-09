@@ -5,6 +5,8 @@ import { requireAuth, requireOwner, requirePermission } from '../middleware/auth
 import { db } from '../db/database.ts';
 import { AuditService } from '../services/audit.service.ts';
 import type { LoyaltyProgram, SalesOrderItem } from '../db/schema.ts';
+import type { ExternalSyncOrder } from '../integrations/interfaces.ts';
+import { activeDistribution } from '../integrations/distribution.ts';
 
 const router = Router();
 const DateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Sana YYYY-MM-DD formatida bo‘lishi kerak.')
@@ -60,18 +62,34 @@ function validateAndNormalize(input: z.infer<typeof ProgramInput>, companyId: st
   };
 }
 
-function buildResults(program: LoyaltyProgram) {
+export function buildResults(program: LoyaltyProgram, liveOrders?: ExternalSyncOrder[], sourceName?: string) {
   const companyId = program.company_id;
   const start = program.start_date;
   const end = program.end_date;
-  const orders = db.find('sales_orders', order => order.company_id === companyId
-    && order.status === 'DELIVERED'
-    && order.order_date.slice(0, 10) >= start
-    && order.order_date.slice(0, 10) <= end);
+  const orders = liveOrders
+    ? liveOrders.filter(order => order.status === 'DELIVERED'
+      && order.orderDate.slice(0, 10) >= start
+      && order.orderDate.slice(0, 10) <= end)
+      .map(order => ({ id: order.externalId, customer_id: order.customerCode, customer_name: order.customerName,
+        agent_id: order.agentCode || '', agent_name: order.agentName || '', expeditor_name: order.expeditorName || '', net_sales: order.totalAmount,
+        status: 'DELIVERED' as const, order_date: order.orderDate }))
+    : db.find('sales_orders', order => order.company_id === companyId
+      && order.status === 'DELIVERED'
+      && order.order_date.slice(0, 10) >= start
+      && order.order_date.slice(0, 10) <= end).map(order => ({ ...order, agent_name: '' }));
   const orderIds = new Set(orders.map(order => order.id));
   const itemsByOrder = new Map<string, SalesOrderItem[]>();
   if (program.metric === 'QUANTITY') {
-    for (const item of db.find('sales_order_items', row => orderIds.has(row.sales_order_id) && program.product_ids.includes(row.product_id))) {
+    const selectedProducts = db.find('products', product => product.company_id === companyId && program.product_ids.includes(product.id));
+    const selectedSkus = new Set(selectedProducts.flatMap(product => [product.sku, product.external_id].filter((value): value is string => !!value)));
+    const items = liveOrders
+      ? liveOrders.filter(order => orderIds.has(order.externalId)).flatMap(order => (order.items || []).map(item => ({
+        sales_order_id: order.externalId, product_id: item.sku, sku: item.sku, product_name: item.name, quantity: item.quantity
+      } as SalesOrderItem)))
+      : db.find('sales_order_items', row => orderIds.has(row.sales_order_id));
+    for (const item of items.filter(row => liveOrders
+      ? selectedSkus.has(String(row.sku || row.product_id)) || selectedProducts.some(product => product.id === row.product_id)
+      : program.product_ids.includes(row.product_id))) {
       if (!itemsByOrder.has(item.sales_order_id)) itemsByOrder.set(item.sales_order_id, []);
       itemsByOrder.get(item.sales_order_id)!.push(item);
     }
@@ -92,7 +110,7 @@ function buildResults(program: LoyaltyProgram) {
       customer_id: customerId,
       customer: order.customer_name || customerNames.get(order.customer_id) || 'Mijoz nomi yo‘q',
       agent_id: program.group_by_agent ? agentId : '',
-      agent: program.group_by_agent ? (agents.get(agentId) || order.expeditor_name || 'Agent ko‘rsatilmagan') : 'Barcha agentlar',
+      agent: program.group_by_agent ? (agents.get(agentId) || order.agent_name || order.expeditor_name || 'Agent ko‘rsatilmagan') : 'Barcha agentlar',
       value: 0,
       order_count: 0
     };
@@ -117,7 +135,7 @@ function buildResults(program: LoyaltyProgram) {
   const earned = rows.filter(row => row.earned_reward);
   const rewardCounts = [...new Set(tiers.map(tier => tier.reward))]
     .map(reward => ({ reward, count: earned.filter(row => row.earned_reward === reward).length }));
-  return { rows, summary: { customers: rows.length, qualified: earned.length, orders: rows.reduce((sum, row) => sum + row.order_count, 0), total_value: totalValue, reward_counts: rewardCounts }, computed_from: 'DistroPro bazasidagi yetkazilgan savdolar' };
+  return { rows, summary: { customers: rows.length, qualified: earned.length, orders: rows.reduce((sum, row) => sum + row.order_count, 0), total_value: totalValue, reward_counts: rewardCounts }, computed_from: liveOrders ? `${sourceName || 'Ulangan tizim'}dan jonli olingan yetkazilgan savdolar` : 'DistroPro bazasidagi yetkazilgan savdolar' };
 }
 
 router.use(requireAuth);
@@ -130,10 +148,18 @@ router.get('/programs', requirePermission('reports', 'view'), (req: Request, res
   } catch (error) { next(error); }
 });
 
-router.get('/programs/:id/results', requirePermission('reports', 'view'), (req: Request, res: Response, next) => {
+router.get('/programs/:id/results', requirePermission('reports', 'view'), async (req: Request, res: Response, next) => {
   try {
     const program = db.findById('loyalty_programs', req.params.id);
     if (!program || program.company_id !== req.user!.companyId) { res.status(404).json({ success: false, error: 'Aksiya topilmadi.' }); return; }
+    const connected = activeDistribution(req.user!.companyId);
+    if (connected?.capabilities.history) {
+      const orders = await connected.adapter.importOrders(connected.integration.config, {
+        dateFrom: program.start_date, dateTo: program.end_date, status: [3], withItems: program.metric === 'QUANTITY'
+      });
+      res.json({ ...buildResults(program, orders, connected.name), program_id: program.id, start_date: program.start_date, end_date: program.end_date });
+      return;
+    }
     res.json({ ...buildResults(program), program_id: program.id, start_date: program.start_date, end_date: program.end_date });
   } catch (error) { next(error); }
 });
