@@ -84,6 +84,7 @@ export function buildResults(program: LoyaltyProgram, liveOrders?: ExternalSyncO
       && matchesIntegrationSource(order, integrationId)).map(order => ({ ...order, agent_name: '' }));
   const orderIds = new Set(orders.map(order => order.id));
   const itemsByOrder = new Map<string, SalesOrderItem[]>();
+  let productUnitsMismatch = false;
   if (program.metric === 'QUANTITY') {
     // Campaigns refer to internal product ids. When the connected server changes, resolve those ids to
     // stable external SKUs from hidden historical records, then match the same products in the new catalog.
@@ -91,6 +92,7 @@ export function buildResults(program: LoyaltyProgram, liveOrders?: ExternalSyncO
     const selectedSkus = new Set(linkedProducts.flatMap(product => [product.sku, product.external_id, product.code].filter((value): value is string => !!value).map(String)));
     const selectedProducts = db.find('products', product => product.company_id === companyId && matchesIntegrationSource(product, integrationId)
       && (program.product_ids.includes(product.id) || [product.sku, product.external_id, product.code].some(value => !!value && selectedSkus.has(String(value)))));
+    productUnitsMismatch = selectedProducts.some(product => normalizeUnit(product.unit) !== normalizeUnit(program.unit));
     for (const product of selectedProducts) for (const code of [product.sku, product.external_id, product.code]) if (code) selectedSkus.add(String(code));
     const items = liveOrders
       ? liveOrders.filter(order => orderIds.has(order.externalId)).flatMap(order => (order.items || []).map(item => ({
@@ -149,10 +151,17 @@ export function buildResults(program: LoyaltyProgram, liveOrders?: ExternalSyncO
     };
   }).sort((a, b) => b.value - a.value || a.customer.localeCompare(b.customer, 'uz'));
   const totalValue = rows.reduce((sum, row) => sum + row.value, 0);
-  const earned = rows.filter(row => row.earned_reward);
+  const expectsKilograms = program.metric === 'QUANTITY' && program.terms.some(term => /kilogram|kilogramm|\bkg\b/i.test(term));
+  const calculationWarning = expectsKilograms && normalizeUnit(program.unit) !== 'kg'
+    ? `Aksiya shartida kg ko‘rsatilgan, lekin dastur ${program.unit} bo‘yicha hisoblayapti. Sovg‘a shartlari birliklar moslanguncha hisoblanmaydi.`
+    : productUnitsMismatch ? 'Aksiya o‘lchov birligi tanlangan mahsulot birligiga mos emas. Sovg‘a shartlari birliklar moslanguncha hisoblanmaydi.' : null;
+  if (calculationWarning) for (const row of rows) {
+    row.earned_reward = null; row.next_reward = null; row.next_threshold = null; row.remaining = null;
+  }
+  const earned = calculationWarning ? [] : rows.filter(row => row.earned_reward);
   const rewardCounts = [...new Set(tiers.map(tier => tier.reward))]
     .map(reward => ({ reward, count: earned.filter(row => row.earned_reward === reward).length }));
-  return { rows, summary: { customers: rows.length, qualified: earned.length, orders: rows.reduce((sum, row) => sum + row.order_count, 0), total_value: totalValue, reward_counts: rewardCounts }, computed_from: liveOrders ? `${sourceName || 'Ulangan tizim'}dan jonli olingan yetkazilgan savdolar` : `${sourceName || 'DistroPro'} bazasidagi yetkazilgan savdolar` };
+  return { rows, summary: { customers: rows.length, qualified: earned.length, orders: rows.reduce((sum, row) => sum + row.order_count, 0), total_value: totalValue, reward_counts: rewardCounts }, calculation_warning: calculationWarning, computed_from: liveOrders ? `${sourceName || 'Ulangan tizim'}dan jonli olingan yetkazilgan savdolar` : `${sourceName || 'DistroPro'} bazasidagi yetkazilgan savdolar` };
 }
 
 router.use(requireAuth);
@@ -189,7 +198,7 @@ router.get('/agents/:agentId/results', requirePermission('reports', 'view'), (re
       // Always group by agent for the profile, even when the campaign overview is grouped by customer only.
       const result = buildResults({ ...program, group_by_agent: true }, undefined, connected?.name || 'DistroPro', integrationId);
       return result.rows.filter(row => row.agent_id === agent.id).map(row => ({
-        ...row, program_id: program.id, program_name: program.name, metric: program.metric, unit: program.unit,
+        ...row, calculation_warning: result.calculation_warning, program_id: program.id, program_name: program.name, metric: program.metric, unit: program.unit,
         start_date: program.start_date, end_date: program.end_date, is_active: program.is_active
       }));
     }).sort((a, b) => Number(b.is_active) - Number(a.is_active) || b.value - a.value || a.customer.localeCompare(b.customer, 'uz'));

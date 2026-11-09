@@ -382,11 +382,11 @@ export const AgentDetail: React.FC<{ agentId: string; a: Period; b: Period; inte
                     <table className="min-w-[900px] w-full text-xs">
                       <thead className="sticky top-0 bg-neutral-50 text-left text-[10px] uppercase text-neutral-500"><tr><th className="px-3 py-2">Aksiya / mijoz</th><th className="px-3 py-2">Telefon / manzil</th><th className="px-3 py-2 text-right">Sotuv</th><th className="px-3 py-2 text-right">Buyurtma</th><th className="px-3 py-2">Olgan sovg‘a</th><th className="px-3 py-2">Keyingi sovg‘a</th><th className="px-3 py-2 text-right">Qolgan</th><th className="px-3 py-2">Davri</th></tr></thead>
                       <tbody className="divide-y divide-neutral-100">{loyalty.rows.map((row: any) => <tr key={`${row.program_id}|${row.customer_id}`}>
-                        <td className="px-3 py-2"><b>{row.program_name}</b><span className="mt-0.5 block text-neutral-500">{row.customer}{row.customer_code ? ` · ${row.customer_code}` : ''}</span></td>
+                        <td className="px-3 py-2"><b>{row.program_name}</b>{row.calculation_warning && <span className="mt-0.5 block text-rose-700">Hisoblanmadi: {row.calculation_warning}</span>}<span className="mt-0.5 block text-neutral-500">{row.customer}{row.customer_code ? ` · ${row.customer_code}` : ''}</span></td>
                         <td className="px-3 py-2 text-neutral-600">{[row.customer_phone, row.customer_address].filter(Boolean).join(' · ') || '—'}</td>
                         <td className="px-3 py-2 text-right font-semibold">{row.metric === 'AMOUNT' ? money(row.value) : `${quantity(row.value)} ${row.unit}`}</td>
                         <td className="px-3 py-2 text-right">{row.order_count}</td>
-                        <td className="px-3 py-2">{row.earned_reward || '—'}</td><td className="px-3 py-2">{row.next_reward || (row.earned_reward ? 'Barcha bosqich bajarildi' : '—')}</td>
+                        <td className="px-3 py-2">{row.calculation_warning ? 'Hisoblanmadi' : row.earned_reward || '—'}</td><td className="px-3 py-2">{row.calculation_warning ? 'Hisoblanmadi' : row.next_reward || (row.earned_reward ? 'Barcha bosqich bajarildi' : '—')}</td>
                         <td className="px-3 py-2 text-right">{row.remaining === null ? '—' : row.metric === 'AMOUNT' ? money(row.remaining) : `${quantity(row.remaining)} ${row.unit}`}</td>
                         <td className="px-3 py-2 text-neutral-500">{row.start_date} — {row.end_date}{!row.is_active ? ' · arxiv' : ''}</td>
                       </tr>)}</tbody>
