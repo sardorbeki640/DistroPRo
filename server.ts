@@ -141,9 +141,9 @@ async function startServer() {
   console.log('[DB Boot] Ma’lumotlar bazasi tayyor.');
 
   // API Routes
-  // A successful write response is sent only after Turso confirms the transaction.
+  // A successful write response is sent only after the selected cloud database confirms the transaction.
   app.use('/api', (req, res, next) => {
-    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || !db.isTursoEnabled()) return next();
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || !db.isCloudEnabled()) return next();
     const sendJson = res.json.bind(res);
     let waitingForTurso = false;
     res.json = ((body: any) => {

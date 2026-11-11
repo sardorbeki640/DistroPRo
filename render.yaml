@@ -21,6 +21,8 @@ services:
         sync: false
       - key: TURSO_AUTH_TOKEN
         sync: false
+      - key: NEON_DATABASE_URL
+        sync: false
       - key: OWNER_SETUP_TOKEN
         sync: false
       - key: JWT_SECRET

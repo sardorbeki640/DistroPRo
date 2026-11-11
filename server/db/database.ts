@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { createClient, type Client } from '@libsql/client';
+import { Pool, type PoolClient } from 'pg';
 import type { DatabaseSchema } from './schema.ts';
 import { decryptSecret, encryptSecret } from '../jarvis/secrets.ts';
 
@@ -107,6 +108,7 @@ class DatabaseManager {
   private transactionDepth = 0;
   private nextSeq = 1;
   private turso: Client | null = null;
+  private neon: Pool | null = null;
   private tursoDrain: Promise<void> | null = null;
   private tursoRetryTimer: NodeJS.Timeout | null = null;
   private tursoRetryDelayMs = 5_000;
@@ -135,7 +137,7 @@ class DatabaseManager {
     const count = Number(this.sql.prepare('SELECT COUNT(*) AS n FROM rows').get().n);
     if (count === 0 && fs.existsSync(LEGACY_JSON) && fs.statSync(LEGACY_JSON).size > 0) {
       this.importLegacyJson();
-    } else if (!process.env.TURSO_DATABASE_URL?.trim() || !process.env.TURSO_AUTH_TOKEN?.trim()) {
+    } else if (!process.env.NEON_DATABASE_URL?.trim() && (!process.env.TURSO_DATABASE_URL?.trim() || !process.env.TURSO_AUTH_TOKEN?.trim())) {
       // With Turso enabled, wait to hydrate until we know which snapshot is
       // authoritative; holding both local and cloud copies can exceed a small
       // host's memory limit during startup.
@@ -202,6 +204,7 @@ class DatabaseManager {
 
   /** Connect the local SQLite cache to a Turso database and restore the cloud copy before migrations run. */
   public async connectTurso(): Promise<void> {
+    if (process.env.NEON_DATABASE_URL?.trim()) return this.connectNeon();
     if (this.turso) return;
     const url = process.env.TURSO_DATABASE_URL?.trim();
     const authToken = process.env.TURSO_AUTH_TOKEN?.trim();
@@ -284,6 +287,85 @@ class DatabaseManager {
     console.log(`[Turso] Ulanish tayyor; ${restoredRows} qator ${Date.now() - startedAt} ms da tiklandi.`);
   }
 
+  /** Connect the local SQLite cache to Neon Postgres; the remote rows remain the authoritative snapshot. */
+  public async connectNeon(): Promise<void> {
+    if (this.neon) return;
+    const connectionString = process.env.NEON_DATABASE_URL?.trim();
+    if (!connectionString) return;
+    const pool = new Pool({ connectionString, ssl: true, max: 4, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 15_000 });
+    const startedAt = Date.now();
+    try {
+      await pool.query('CREATE TABLE IF NOT EXISTS distropro_rows (tbl TEXT NOT NULL, k TEXT NOT NULL, seq BIGINT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tbl, k))');
+      const count = Number((await pool.query('SELECT COUNT(*)::bigint AS n FROM distropro_rows')).rows[0]?.n || 0);
+      const localCount = Number(this.sql.prepare('SELECT COUNT(*) AS n FROM rows').get().n);
+      if (count === 0) {
+        if (localCount > 0 && process.env.NEON_ALLOW_LOCAL_SEED !== '1') {
+          throw new Error(`Neon bo‘sh, lekin mahalliy nusxada ${localCount} qator bor. Noto‘liq yoki eski nusxa avtomatik ko‘chirilmaydi; avval Turso → Neon migratsiyasini bajaring.`);
+        }
+        if (localCount > 0) await this.writeNeonRows(pool, this.sql.prepare('SELECT tbl, k, seq, data FROM rows ORDER BY tbl, seq').iterate());
+        await this.reloadFromSqliteYielding();
+      } else {
+        this.data = JSON.parse(JSON.stringify(INITIAL_EMPTY_SCHEMA));
+        this.index.clear();
+        this.meta = new WeakMap<object, RowMeta>();
+        this.nextSeq = 1;
+        const pending = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id').all() as TursoOutboxOp[];
+        this.sql.exec('BEGIN IMMEDIATE');
+        try {
+          this.sql.exec('DELETE FROM rows');
+          const put = this.sql.prepare('INSERT OR REPLACE INTO rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)');
+          let lastTable = '';
+          let lastKey = '';
+          let page = await pool.query('SELECT tbl, k, seq, data FROM distropro_rows ORDER BY tbl, k LIMIT $1', [1000]);
+          let lastYieldAt = Date.now();
+          while (page.rows.length) {
+            for (const row of page.rows) {
+              const tableName = String(row.tbl), key = String(row.k), seq = Number(row.seq), data = String(row.data);
+              put.run(tableName, key, seq, data);
+              this.hydrateMemoryRow(tableName, key, seq, data);
+              lastTable = tableName;
+              lastKey = key;
+              if (Date.now() - lastYieldAt >= 25) { await new Promise<void>(resolve => setImmediate(resolve)); lastYieldAt = Date.now(); }
+            }
+            if (page.rows.length < 1000) break;
+            page = await pool.query('SELECT tbl, k, seq, data FROM distropro_rows WHERE (tbl, k) > ($1, $2) ORDER BY tbl, k LIMIT $3', [lastTable, lastKey, 1000]);
+          }
+          await this.applyOutboxToLocal(pending);
+          this.sql.exec('COMMIT');
+          await this.applyOutboxToMemory(pending);
+          this.nextSeq = Math.max(this.nextSeq, ...pending.filter(op => op.seq !== null).map(op => Number(op.seq) + 1), 1);
+        } catch (error) {
+          try { this.sql.exec('ROLLBACK'); } catch { /* not started */ }
+          throw error;
+        }
+      }
+      this.neon = pool;
+      await this.flushTurso();
+      this.scheduleTursoFlush();
+      console.log(`[Neon] Ulanish tayyor; ${count} qator ${Date.now() - startedAt} ms da tiklandi.`);
+    } catch (error) {
+      await pool.end().catch(() => undefined);
+      throw new Error(`Neon bazasiga ulanish yoki ma’lumotlarni yuklash amalga oshmadi: ${(error as Error).message}`, { cause: error });
+    }
+  }
+
+  private async writeNeonRows(pool: Pool, rows: Iterable<any>): Promise<void> {
+    let batch: any[] = [];
+    const write = async () => {
+      if (!batch.length) return;
+      const values: unknown[] = [];
+      const tuples = batch.map((row, i) => {
+        const n = i * 4;
+        values.push(row.tbl, row.k, Number(row.seq), String(row.data));
+        return `($${n + 1}, $${n + 2}, $${n + 3}, $${n + 4})`;
+      });
+      await pool.query(`INSERT INTO distropro_rows(tbl, k, seq, data) VALUES ${tuples.join(',')} ON CONFLICT (tbl, k) DO UPDATE SET seq = EXCLUDED.seq, data = EXCLUDED.data`, values);
+      batch = [];
+    };
+    for (const row of rows) { batch.push(row); if (batch.length === 250) await write(); }
+    await write();
+  }
+
   /** Load a cloud row into the live in-memory view while the optional SQLite cache is populated. */
   private hydrateMemoryRow(tableName: string, key: string, seq: number, serialized: string): void {
     const row = this.deserialize(tableName, JSON.parse(serialized));
@@ -364,9 +446,11 @@ class DatabaseManager {
 
   /** Wait until every locally committed write has reached Turso. Mutating API responses use this as a durability barrier. */
   public isTursoEnabled(): boolean { return this.turso !== null; }
+  public isCloudEnabled(): boolean { return this.turso !== null || this.neon !== null; }
+  public storageProvider(): 'neon' | 'turso' | 'sqlite' { return this.neon ? 'neon' : this.turso ? 'turso' : 'sqlite'; }
 
   public async flushTurso(): Promise<void> {
-    if (!this.turso || !this.sql) return;
+    if ((!this.turso && !this.neon) || !this.sql) return;
     if (this.tursoDrain) {
       await this.tursoDrain;
       if (Number(this.sql.prepare('SELECT COUNT(*) AS n FROM turso_outbox').get().n) > 0) return this.flushTurso();
@@ -380,7 +464,7 @@ class DatabaseManager {
     } catch (error) {
       const now = Date.now();
       if (now - this.tursoLastErrorLogAt >= 60_000) {
-        console.error('[Turso] Sinxronlash xatosi; navbat saqlanib, keyin qayta uriniladi:', (error as Error).message);
+        console.error(`[${this.neon ? 'Neon' : 'Turso'}] Sinxronlash xatosi; navbat saqlanib, keyin qayta uriniladi:`, (error as Error).message);
         this.tursoLastErrorLogAt = now;
       }
       this.tursoRetryDelayMs = Math.min(this.tursoRetryDelayMs * 2, 5 * 60_000);
@@ -392,7 +476,7 @@ class DatabaseManager {
 
   /** Coalesce background writes and back off on network failures instead of flooding Turso and Render logs. */
   private scheduleTursoFlush(delayMs = this.tursoRetryDelayMs): void {
-    if (!this.turso || !this.sql || this.tursoRetryTimer) return;
+    if ((!this.turso && !this.neon) || !this.sql || this.tursoRetryTimer) return;
     this.tursoRetryTimer = setTimeout(() => {
       this.tursoRetryTimer = null;
       void this.flushTurso().catch(() => { /* flushTurso logs once and schedules a backed-off retry */ });
@@ -401,6 +485,7 @@ class DatabaseManager {
   }
 
   private async drainTursoOutbox(): Promise<void> {
+    if (this.neon) return this.drainNeonOutbox();
     while (true) {
       const ops = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id LIMIT 50').all() as TursoOutboxOp[];
       if (!ops.length) return;
@@ -438,6 +523,45 @@ class DatabaseManager {
       const ids = ops.map(op => op.id);
       const placeholders = ids.map(() => '?').join(',');
       this.sql.prepare(`DELETE FROM turso_outbox WHERE id IN (${placeholders})`).run(...ids);
+    }
+  }
+
+  /** Coalesces repeated edits to the same row and sends each chunk in one Postgres transaction. */
+  private async drainNeonOutbox(): Promise<void> {
+    while (true) {
+      const ops = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id LIMIT 250').all() as TursoOutboxOp[];
+      if (!ops.length) return;
+      const client: PoolClient = await this.neon!.connect();
+      try {
+        await client.query('BEGIN');
+        let segment: TursoOutboxOp[] = [];
+        const flushSegment = async () => {
+          if (!segment.length) return;
+          const lastByKey = new Map<string, TursoOutboxOp>();
+          for (const op of segment) if (op.k !== null) lastByKey.set(`${op.tbl}\u0000${op.k}`, op);
+          const final = [...lastByKey.values()].sort((a, b) => a.id - b.id);
+          const deletes = final.filter(op => op.op === 'delete');
+          if (deletes.length) await client.query('DELETE FROM distropro_rows d USING unnest($1::text[], $2::text[]) AS x(tbl, k) WHERE d.tbl = x.tbl AND d.k = x.k', [deletes.map(op => op.tbl), deletes.map(op => op.k)]);
+          const upserts = final.filter(op => op.op === 'upsert' && op.k !== null && op.seq !== null && op.data !== null);
+          if (upserts.length) {
+            const values: unknown[] = [];
+            const tuples = upserts.map((op, i) => { const n = i * 4; values.push(op.tbl, op.k, op.seq, op.data); return `($${n + 1}, $${n + 2}, $${n + 3}, $${n + 4})`; });
+            await client.query(`INSERT INTO distropro_rows(tbl, k, seq, data) VALUES ${tuples.join(',')} ON CONFLICT (tbl, k) DO UPDATE SET seq = EXCLUDED.seq, data = EXCLUDED.data`, values);
+          }
+          segment = [];
+        };
+        for (const op of ops) {
+          if (op.op === 'clear') { await flushSegment(); await client.query('DELETE FROM distropro_rows WHERE tbl = $1', [op.tbl]); }
+          else segment.push(op);
+        }
+        await flushSegment();
+        await client.query('COMMIT');
+        const ids = ops.map(op => op.id);
+        this.sql.prepare(`DELETE FROM turso_outbox WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+      } catch (error) {
+        try { await client.query('ROLLBACK'); } catch { /* connection already failed */ }
+        throw error;
+      } finally { client.release(); }
     }
   }
 
@@ -527,7 +651,7 @@ class DatabaseManager {
   private flush(): void {
     if (!this.sql || (!this.dirty.size && !this.fullDirty.size)) return;
     const { upsert, remove, clearTable } = this.stmt!;
-    const enqueue = this.turso ? this.sql.prepare('INSERT INTO turso_outbox(op, tbl, k, seq, data) VALUES (?, ?, ?, ?, ?)') : null;
+    const enqueue = this.isCloudEnabled() ? this.sql.prepare('INSERT INTO turso_outbox(op, tbl, k, seq, data) VALUES (?, ?, ?, ?, ?)') : null;
     this.sql.exec('BEGIN IMMEDIATE');
     try {
       for (const table of this.fullDirty) {
@@ -567,7 +691,7 @@ class DatabaseManager {
     }
     this.dirty.clear();
     this.fullDirty.clear();
-    if (this.turso) this.scheduleTursoFlush();
+    if (this.isCloudEnabled()) this.scheduleTursoFlush();
   }
 
   /** Kept for callers of the old API: writes whatever is pending. */
@@ -704,7 +828,13 @@ class DatabaseManager {
       const idx = table.findIndex((item: any) => item.id === id);
       if (idx === -1) return null;
       const previous = table[idx];
-      const next = { ...previous, ...updates, updated_at: new Date().toISOString() };
+      const next = { ...previous, ...updates };
+      const beforeComparable = { ...previous };
+      const nextComparable = { ...next };
+      delete beforeComparable.updated_at;
+      delete nextComparable.updated_at;
+      if (isDeepStrictEqual(beforeComparable, nextComparable)) return previous;
+      next.updated_at = new Date().toISOString();
       const m = this.meta.get(previous) || this.ensureMeta(t, previous);
       this.meta.set(next, m);
       table[idx] = next;
@@ -789,7 +919,7 @@ class DatabaseManager {
           const nextComparable = { ...merged };
           // Importers stamp every row with the current time. Ignore that field when
           // deciding whether business data changed, so an unchanged directory does
-          // not generate a Turso row write on every refresh.
+          // not generate a cloud row write on every refresh.
           delete beforeComparable.updated_at;
           delete nextComparable.updated_at;
           if (isDeepStrictEqual(beforeComparable, nextComparable)) continue;
@@ -883,7 +1013,7 @@ class DatabaseManager {
 
   public close(): void {
     if (!this.sql) return;
-    try { this.persist(); } finally { this.sql.close(); this.sql = null; this.isLoaded = false; }
+    try { this.persist(); } finally { this.sql.close(); this.sql = null; this.isLoaded = false; void this.neon?.end(); this.neon = null; }
   }
 
   // Reset database for tests. Refused outside the test runner, which gives every test file its own data folder:

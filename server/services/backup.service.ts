@@ -16,16 +16,17 @@ export const backupRoot = () => path.join(db.directory, 'backups');
 export interface BackupFile { name: string; kind: 'daily' | 'weekly'; size_mb: number; created_at: string }
 
 export function backupStatus() {
-  const turso = db.isTursoEnabled();
+  const provider = db.storageProvider();
+  const cloud = provider !== 'sqlite';
   const extraCopy = process.env.BACKUP_COPY_DIR || null;
   return {
-    storage: turso ? 'turso' as const : 'sqlite' as const,
-    scheduled: !turso,
+    storage: provider,
+    scheduled: !cloud,
     extra_copy_dir: extraCopy,
-    storage_notice: turso
+    storage_notice: cloud
       ? (extraCopy
-        ? 'Asosiy baza Turso’da. Bu oynadagi nusxalar qo‘lda yoki yuklab olinadigan nusxalar; Render qayta ishga tushsa lokal fayllar saqlanib qolishi kafolatlanmaydi. BACKUP_COPY_DIR nusxasi ham sozlangan.'
-        : 'Asosiy baza Turso’da. Avtomatik fayl nusxasi yoqilmagan; Render qayta ishga tushsa lokal nusxalar yo‘qolishi mumkin. Nusxani hozir oling va yuklab saqlang yoki doimiy BACKUP_COPY_DIR sozlang.')
+        ? `Asosiy baza ${provider === 'neon' ? 'Neon PostgreSQL’da' : 'Turso’da'}. Bu oynadagi nusxalar qo‘lda yoki yuklab olinadigan nusxalar; Render qayta ishga tushsa lokal fayllar saqlanib qolishi kafolatlanmaydi. BACKUP_COPY_DIR nusxasi ham sozlangan.`
+        : `Asosiy baza ${provider === 'neon' ? 'Neon PostgreSQL’da' : 'Turso’da'}. Avtomatik fayl nusxasi yoqilmagan; Render qayta ishga tushsa lokal nusxalar yo‘qolishi mumkin. Nusxani hozir oling va yuklab saqlang yoki doimiy BACKUP_COPY_DIR sozlang.`)
       : (extraCopy
         ? 'SQLite bazasi ishlatilmoqda; kunlik/haftalik nusxalar avtomatik olinadi va qo‘shimcha joyga ko‘chiriladi.'
         : 'SQLite bazasi ishlatilmoqda; kunlik/haftalik nusxalar avtomatik olinadi. Server diski doimiy bo‘lmasa, nusxalarni alohida joyga ham saqlang.')
@@ -57,7 +58,7 @@ function prune(dir: string, keep: number) {
 /** Makes today's backup (and the weekly one on Mondays). Returns the daily file path. */
 export async function runBackup(now = new Date()): Promise<{ file: string; copied_to: string | null }> {
   const today = businessToday();
-  if (db.isTursoEnabled()) {
+  if (db.isCloudEnabled()) {
     // Back up only after queued writes are durable in the primary cloud database.
     // Rewriting all rows here would create a large Turso outbox and block the small hosted instance.
     await db.flushTurso();
@@ -120,7 +121,7 @@ export function startBackupScheduler(): NodeJS.Timeout {
       // Turso is the durable database on hosted deployments. The local SQLite file
       // is only a cache there; checkpointAll() would synchronously rewrite every
       // row on the single-core free instance and stall health checks during boot.
-      if (db.isTursoEnabled()) return;
+      if (db.isCloudEnabled()) return;
       const hour = Number(new Date().toLocaleString('en-GB', { timeZone: 'Asia/Tashkent', hour: '2-digit', hour12: false }));
       const todays = listBackups().some(b => b.kind === 'daily' && b.name === `finance-${businessToday()}.sqlite`);
       if ((!todays && hour >= 2) || lastBackupAgeHours() > 26) {

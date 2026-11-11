@@ -249,7 +249,7 @@ export const api = {
     fetchApi(`/api/staff/${employeeId}/profile`, { method: 'PUT', body: JSON.stringify(body) }),
   getCompany: (): Promise<{ company: { name: string; tax_id: string; address: string; phone: string } }> => fetchApi('/api/system/company'),
   saveCompany: (body: { name: string; tax_id: string; address: string; phone: string }): Promise<any> => fetchApi('/api/system/company', { method: 'PUT', body: JSON.stringify(body) }),
-  getBackups: (): Promise<{ backups: { name: string; kind: 'daily' | 'weekly'; size_mb: number; created_at: string }[]; storage: 'turso' | 'sqlite'; scheduled: boolean; storage_notice: string; extra_copy_dir: string | null }> => fetchApi('/api/system/backups'),
+  getBackups: (): Promise<{ backups: { name: string; kind: 'daily' | 'weekly'; size_mb: number; created_at: string }[]; storage: 'neon' | 'turso' | 'sqlite'; scheduled: boolean; storage_notice: string; extra_copy_dir: string | null }> => fetchApi('/api/system/backups'),
   runBackup: (): Promise<{ file: string; copied_to: string | null; backups: { name: string; kind: 'daily' | 'weekly'; size_mb: number; created_at: string }[] }> => fetchApi('/api/system/backups', { method: 'POST' }),
   downloadBackup: (kind: 'daily' | 'weekly', name: string): Promise<void> => downloadWithAuth(`/api/system/backups/${encodeURIComponent(kind)}/${encodeURIComponent(name)}`, name),
 
