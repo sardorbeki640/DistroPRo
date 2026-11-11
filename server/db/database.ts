@@ -129,6 +129,7 @@ class DatabaseManager {
     this.sql.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=10000;');
     this.sql.exec('CREATE TABLE IF NOT EXISTS rows(tbl TEXT NOT NULL, k TEXT NOT NULL, seq INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(tbl, k)) WITHOUT ROWID');
     this.sql.exec('CREATE TABLE IF NOT EXISTS turso_outbox(id INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT NOT NULL, tbl TEXT NOT NULL, k TEXT, seq INTEGER, data TEXT)');
+    this.sql.exec('CREATE TABLE IF NOT EXISTS cloud_cache_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID');
     this.stmt = {
       upsert: this.sql.prepare('INSERT OR REPLACE INTO rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)'),
       remove: this.sql.prepare('DELETE FROM rows WHERE tbl = ? AND k = ?'),
@@ -296,20 +297,74 @@ class DatabaseManager {
     const startedAt = Date.now();
     try {
       await pool.query('CREATE TABLE IF NOT EXISTS distropro_rows (tbl TEXT NOT NULL, k TEXT NOT NULL, seq BIGINT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tbl, k))');
+      await pool.query(`CREATE TABLE IF NOT EXISTS distropro_sync_changes (
+        change_id BIGSERIAL PRIMARY KEY, op TEXT NOT NULL, tbl TEXT NOT NULL, k TEXT, seq BIGINT, data TEXT
+      )`);
       const count = Number((await pool.query('SELECT COUNT(*)::bigint AS n FROM distropro_rows')).rows[0]?.n || 0);
       const localCount = Number(this.sql.prepare('SELECT COUNT(*) AS n FROM rows').get().n);
+      const changeBounds = (await pool.query('SELECT COALESCE(MIN(change_id), 0)::bigint AS first_id, COALESCE(MAX(change_id), 0)::bigint AS last_id FROM distropro_sync_changes')).rows[0];
+      const firstChangeId = Number(changeBounds.first_id);
+      const latestChangeId = Number(changeBounds.last_id);
+      const localCursorRow = this.sql.prepare("SELECT value FROM cloud_cache_meta WHERE key = 'neon_change_id'").get();
+      const localCursor = localCursorRow ? Number(localCursorRow.value) : null;
+      const cacheCanCatchUp = localCount > 0 && localCursor !== null && Number.isSafeInteger(localCursor)
+        && localCursor <= latestChangeId
+        && (localCursor === latestChangeId || firstChangeId === 0 || localCursor >= firstChangeId - 1);
+      const pending = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id').all() as TursoOutboxOp[];
+      const applyCloudChangesToLocal = async (after: number, through: number): Promise<{ cursor: number; rows: number }> => {
+        let cursor = after;
+        let applied = 0;
+        const put = this.sql.prepare('INSERT OR REPLACE INTO rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)');
+        const remove = this.sql.prepare('DELETE FROM rows WHERE tbl = ? AND k = ?');
+        const clear = this.sql.prepare('DELETE FROM rows WHERE tbl = ?');
+        while (cursor < through) {
+          const changes = await pool.query(
+            'SELECT change_id, op, tbl, k, seq, data FROM distropro_sync_changes WHERE change_id > $1 AND change_id <= $2 ORDER BY change_id LIMIT 500',
+            [cursor, through],
+          );
+          if (!changes.rows.length) {
+            // Retention may prune a page while a cold cache is catching up.
+            // Never advance the cursor past a gap; the next start must rebuild
+            // from a full snapshot instead of silently showing stale rows.
+            throw new Error(`Neon o‘zgarishlar jurnali to‘liq emas (${cursor} → ${through}); keshni xavfsiz to‘liq tiklash kerak.`);
+          }
+          this.sql.exec('BEGIN IMMEDIATE');
+          try {
+            for (const change of changes.rows) {
+              if (change.op === 'clear') clear.run(change.tbl);
+              else if (change.op === 'delete' && change.k !== null) remove.run(change.tbl, change.k);
+              else if (change.op === 'upsert' && change.k !== null && change.seq !== null && change.data !== null) put.run(change.tbl, change.k, Number(change.seq), change.data);
+              cursor = Number(change.change_id);
+            }
+            this.sql.exec('COMMIT');
+          } catch (error) {
+            try { this.sql.exec('ROLLBACK'); } catch { /* transaction already closed */ }
+            throw error;
+          }
+          this.sql.prepare("INSERT OR REPLACE INTO cloud_cache_meta(key, value) VALUES ('neon_change_id', ?)").run(String(cursor));
+          applied += changes.rows.length;
+        }
+        return { cursor, rows: applied };
+      };
       if (count === 0) {
         if (localCount > 0 && process.env.NEON_ALLOW_LOCAL_SEED !== '1') {
           throw new Error(`Neon bo‘sh, lekin mahalliy nusxada ${localCount} qator bor. Noto‘liq yoki eski nusxa avtomatik ko‘chirilmaydi; avval Turso → Neon migratsiyasini bajaring.`);
         }
         if (localCount > 0) await this.writeNeonRows(pool, this.sql.prepare('SELECT tbl, k, seq, data FROM rows ORDER BY tbl, seq').iterate());
         await this.reloadFromSqliteYielding();
+        this.sql.prepare("INSERT OR REPLACE INTO cloud_cache_meta(key, value) VALUES ('neon_change_id', ?)").run(String(latestChangeId));
+      } else if (cacheCanCatchUp) {
+        const synced = await applyCloudChangesToLocal(localCursor!, latestChangeId);
+        await this.applyOutboxToLocal(pending);
+        await this.reloadFromSqliteYielding();
+        this.sql.prepare("INSERT OR REPLACE INTO cloud_cache_meta(key, value) VALUES ('neon_change_id', ?)").run(String(latestChangeId));
+        if (synced.rows) console.log(`[Neon] Mahalliy nusxaga ${synced.rows} yangi/o‘zgargan qator qo‘llandi; eski qatorlar qayta yuklanmadi.`);
+        else console.log('[Neon] Mahalliy nusxa yangiligi tasdiqlandi; bulutdan qatorlar qayta olinmadi.');
       } else {
         this.data = JSON.parse(JSON.stringify(INITIAL_EMPTY_SCHEMA));
         this.index.clear();
         this.meta = new WeakMap<object, RowMeta>();
         this.nextSeq = 1;
-        const pending = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id').all() as TursoOutboxOp[];
         // Neon is a remote Postgres service, so a 1k page size caused hundreds of
         // network round-trips for the production snapshot. Keep batches moderate
         // while reducing cold-start latency substantially.
@@ -344,6 +399,12 @@ class DatabaseManager {
           this.sql.exec('COMMIT');
           await this.applyOutboxToMemory(pending);
           this.nextSeq = Math.max(this.nextSeq, ...pending.filter(op => op.seq !== null).map(op => Number(op.seq) + 1), 1);
+          const afterSnapshot = Number((await pool.query('SELECT COALESCE(MAX(change_id), 0)::bigint AS n FROM distropro_sync_changes')).rows[0]?.n || 0);
+          if (afterSnapshot > latestChangeId) {
+            await applyCloudChangesToLocal(latestChangeId, afterSnapshot);
+            await this.reloadFromSqliteYielding();
+          }
+          this.sql.prepare("INSERT OR REPLACE INTO cloud_cache_meta(key, value) VALUES ('neon_change_id', ?)").run(String(afterSnapshot));
         } catch (error) {
           try { this.sql.exec('ROLLBACK'); } catch { /* not started */ }
           throw error;
@@ -459,6 +520,12 @@ class DatabaseManager {
   public isCloudEnabled(): boolean { return this.turso !== null || this.neon !== null; }
   public storageProvider(): 'neon' | 'turso' | 'sqlite' { return this.neon ? 'neon' : this.turso ? 'turso' : 'sqlite'; }
 
+  /** Issue a minimal query to wake/verify Neon without reading application data. */
+  public async pingNeon(): Promise<void> {
+    if (!this.neon) throw new Error('Neon bazasi ulanmagan.');
+    await this.neon.query('SELECT 1');
+  }
+
   public async flushTurso(): Promise<void> {
     if ((!this.turso && !this.neon) || !this.sql) return;
     if (this.tursoDrain) {
@@ -544,6 +611,7 @@ class DatabaseManager {
       const client: PoolClient = await this.neon!.connect();
       try {
         await client.query('BEGIN');
+        await client.query("SELECT pg_advisory_xact_lock(hashtext('distropro-sync-feed'))");
         let segment: TursoOutboxOp[] = [];
         const flushSegment = async () => {
           if (!segment.length) return;
@@ -565,7 +633,29 @@ class DatabaseManager {
           else segment.push(op);
         }
         await flushSegment();
+        let lastChangeId: number | null = null;
+        for (let offset = 0; offset < ops.length; offset += 100) {
+          const page = ops.slice(offset, offset + 100);
+          const values: unknown[] = [];
+          const tuples = page.map((op, index) => {
+            const n = index * 5;
+            values.push(op.op, op.tbl, op.k, op.seq, op.data);
+            return `($${n + 1}, $${n + 2}, $${n + 3}, $${n + 4}, $${n + 5})`;
+          });
+          const inserted = await client.query(
+            `INSERT INTO distropro_sync_changes(op, tbl, k, seq, data) VALUES ${tuples.join(',')} RETURNING change_id`,
+            values,
+          );
+          if (inserted.rows.length) lastChangeId = Math.max(...inserted.rows.map(row => Number(row.change_id)));
+        }
+        // Bound change-feed growth. A cache older than the retained window will
+        // take one safe full snapshot, then resumes incremental catch-up.
+        await client.query(`DELETE FROM distropro_sync_changes
+          WHERE change_id <= GREATEST(0, COALESCE((SELECT MAX(change_id) FROM distropro_sync_changes), 0) - 25000)`);
         await client.query('COMMIT');
+        if (lastChangeId !== null) {
+          this.sql.prepare("INSERT OR REPLACE INTO cloud_cache_meta(key, value) VALUES ('neon_change_id', ?)").run(String(lastChangeId));
+        }
         const ids = ops.map(op => op.id);
         this.sql.prepare(`DELETE FROM turso_outbox WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
       } catch (error) {

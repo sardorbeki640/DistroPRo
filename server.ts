@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import path from 'path';
 import { migrator } from './server/db/migrator.ts';
@@ -50,6 +51,7 @@ import jarvisRoutes from './server/routes/jarvis.routes.ts';
 import loyaltyRoutes from './server/routes/loyalty.routes.ts';
 import { JarvisService } from './server/jarvis/jarvis.service.ts';
 import { errorHandler } from './server/middleware/error.middleware.ts';
+import { gzipJsonResponses } from './server/middleware/gzip-json.middleware.ts';
 import { SetupService } from './server/services/setup.service.ts';
 
 async function startServer() {
@@ -93,6 +95,27 @@ async function startServer() {
       return;
     }
     next();
+  });
+  app.use('/api', gzipJsonResponses);
+  // External cron can keep Neon warm with a SELECT 1. Require a dedicated
+  // bearer secret so this cannot be used as an unauthenticated DB wake-up.
+  app.get('/api/cron/neon-ping', async (req, res) => {
+    const expected = process.env.NEON_PING_TOKEN || '';
+    const authorization = req.get('authorization') || '';
+    const provided = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+    const expectedBuffer = Buffer.from(expected);
+    const providedBuffer = Buffer.from(provided);
+    if (expectedBuffer.length < 32 || expectedBuffer.length !== providedBuffer.length || !timingSafeEqual(expectedBuffer, providedBuffer)) {
+      res.status(expectedBuffer.length < 32 ? 503 : 401).json({ success: false, error: 'Cron autentifikatsiyasi sozlanmagan yoki noto‘g‘ri.' });
+      return;
+    }
+    try {
+      await db.pingNeon();
+      res.json({ success: true, database: 'neon', checkedAt: new Date().toISOString() });
+    } catch (error: any) {
+      console.error('[Neon cron ping] So‘rov bajarilmadi:', error?.message || error);
+      res.status(503).json({ success: false, database: 'neon', error: 'Neon bazasiga ulanib bo‘lmadi.' });
+    }
   });
   const distPath = path.join(process.cwd(), 'dist');
   if (process.env.NODE_ENV === 'production') {
