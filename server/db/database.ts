@@ -310,26 +310,36 @@ class DatabaseManager {
         this.meta = new WeakMap<object, RowMeta>();
         this.nextSeq = 1;
         const pending = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id').all() as TursoOutboxOp[];
+        // Neon is a remote Postgres service, so a 1k page size caused hundreds of
+        // network round-trips for the production snapshot. Keep batches moderate
+        // while reducing cold-start latency substantially.
+        const pageSize = 5_000;
+        let restoredRows = 0;
         this.sql.exec('BEGIN IMMEDIATE');
         try {
           this.sql.exec('DELETE FROM rows');
           const put = this.sql.prepare('INSERT OR REPLACE INTO rows(tbl, k, seq, data) VALUES (?, ?, ?, ?)');
           let lastTable = '';
           let lastKey = '';
-          let page = await pool.query('SELECT tbl, k, seq, data FROM distropro_rows ORDER BY tbl, k LIMIT $1', [1000]);
+          let page = await pool.query('SELECT tbl, k, seq, data FROM distropro_rows ORDER BY tbl, k LIMIT $1', [pageSize]);
           let lastYieldAt = Date.now();
           while (page.rows.length) {
             for (const row of page.rows) {
               const tableName = String(row.tbl), key = String(row.k), seq = Number(row.seq), data = String(row.data);
               put.run(tableName, key, seq, data);
               this.hydrateMemoryRow(tableName, key, seq, data);
+              restoredRows++;
               lastTable = tableName;
               lastKey = key;
               if (Date.now() - lastYieldAt >= 25) { await new Promise<void>(resolve => setImmediate(resolve)); lastYieldAt = Date.now(); }
             }
-            if (page.rows.length < 1000) break;
-            page = await pool.query('SELECT tbl, k, seq, data FROM distropro_rows WHERE (tbl, k) > ($1, $2) ORDER BY tbl, k LIMIT $3', [lastTable, lastKey, 1000]);
+            if (restoredRows > 0 && restoredRows % 50_000 < page.rows.length) {
+              console.log(`[Neon] ${restoredRows} / ${count} qator yuklandi.`);
+            }
+            if (page.rows.length < pageSize) break;
+            page = await pool.query('SELECT tbl, k, seq, data FROM distropro_rows WHERE (tbl, k) > ($1, $2) ORDER BY tbl, k LIMIT $3', [lastTable, lastKey, pageSize]);
           }
+          if (restoredRows !== count) throw new Error(`Neon qatorlar soni mos kelmadi: ${restoredRows}/${count}.`);
           await this.applyOutboxToLocal(pending);
           this.sql.exec('COMMIT');
           await this.applyOutboxToMemory(pending);
