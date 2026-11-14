@@ -19,7 +19,6 @@ export const ChangePasswordModal: React.FC<Props> = ({ forced, onDone, onCancel 
     e.preventDefault();
     setError(null);
     if (next !== repeat) { setError('Yangi parollar bir xil emas.'); return; }
-    if (next.length < 6) { setError('Kamida 6 belgi bo‘lsin.'); return; }
     setSaving(true);
     try {
       await api.changePassword(current, next);
@@ -44,7 +43,7 @@ export const ChangePasswordModal: React.FC<Props> = ({ forced, onDone, onCancel 
         <label className="block text-xs font-semibold text-neutral-700">{forced ? 'Vaqtinchalik parol' : 'Joriy parol'}
           <input type="password" autoFocus required value={current} onChange={e => setCurrent(e.target.value)} className={input} autoComplete="current-password" />
         </label>
-        <label className="block text-xs font-semibold text-neutral-700">Yangi parol (kamida 6 belgi)
+        <label className="block text-xs font-semibold text-neutral-700">Yangi parol
           <input type="password" required value={next} onChange={e => setNext(e.target.value)} className={input} autoComplete="off" data-lpignore="true" />
         </label>
         <label className="block text-xs font-semibold text-neutral-700">Yangi parol (takror)

@@ -179,12 +179,12 @@ export class AuthService {
 
   public static changePassword(userId: string, currentPassword: string, newPassword: string): void {
     const user = db.findById('users', userId);
-    if (!user) throw new Error('Foydalanuvchi topilmadi.');
-    if (!bcrypt.compareSync(currentPassword, user.password_hash)) throw new Error('Joriy parol noto‘g‘ri.');
-    if (currentPassword === newPassword) throw new Error('Yangi parol eskisidan farq qilsin.');
+    if (!user) throw Object.assign(new Error('Foydalanuvchi topilmadi.'), { status: 404 });
+    if (!bcrypt.compareSync(currentPassword, user.password_hash)) throw Object.assign(new Error('Joriy parol noto‘g‘ri.'), { status: 400 });
+    if (currentPassword === newPassword) throw Object.assign(new Error('Yangi parol eskisidan farq qilsin.'), { status: 400 });
     const privileged = this.getUserPermissions(userId);
     const minimumLength = privileged.is_super_admin || privileged.roles.some(r => r.name === 'ADMIN') ? 12 : 8;
-    if (newPassword.length < minimumLength) throw new Error(`Yangi parol kamida ${minimumLength} belgidan iborat bo‘lsin.`);
+    if (newPassword.length < minimumLength) throw Object.assign(new Error(`Yangi parol kamida ${minimumLength} belgidan iborat bo‘lsin.`), { status: 400 });
     db.update('users', userId, { password_hash: bcrypt.hashSync(newPassword, 12), must_change_password: false });
     AuditService.log({ company_id: user.company_id, user_id: user.id, user_email: user.email, action: 'UPDATE', entity: 'User', entity_id: user.id, old_value: null, new_value: { password_changed: true }, reason: 'Foydalanuvchi parolini almashtirdi' });
   }
