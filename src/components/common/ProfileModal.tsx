@@ -35,10 +35,10 @@ export const ProfileModal: React.FC<{ onClose: () => void; onSaved: () => void }
   if (password) return <ChangePasswordModal onCancel={() => setPassword(false)} onDone={() => { setPassword(false); setSaved(true); }} />;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <form onSubmit={save} className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
+      <form onSubmit={save} className="my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-md space-y-4 overflow-y-auto overscroll-contain rounded-2xl bg-white p-5 shadow-2xl sm:max-h-[calc(100dvh-2rem)] sm:p-6">
         <div className="flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-base font-bold"><UserCircle className="h-5 w-5" />Profilim</h2>
+          <h2 id="profile-modal-title" className="flex items-center gap-2 text-base font-bold"><UserCircle className="h-5 w-5" />Profilim</h2>
           <button type="button" onClick={onClose} className="text-neutral-400 hover:text-neutral-700"><X className="h-5 w-5" /></button>
         </div>
         {!form && !error && <p className="text-xs text-neutral-500">Yuklanmoqda…</p>}
