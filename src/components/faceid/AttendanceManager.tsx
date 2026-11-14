@@ -678,8 +678,8 @@ const SettingsTab: React.FC<{ employees: any[]; onError: (e: string) => void; on
           <label className="font-semibold">Tugashi<input type="time" className={input} value={sch.end} onChange={e => setSch({ end: e.target.value })} /></label>
           <label className="font-semibold">Ruxsat, daq<input type="number" min="0" max="120" className={input} value={sch.grace_minutes} onChange={e => setSch({ grace_minutes: Number(e.target.value) })} /></label>
         </div>
-        <div className="flex flex-wrap gap-1">{WEEKDAYS.map((d, i) => { const n = i + 1; const on = sch.workdays.includes(n); return <button key={d} onClick={() => setSch({ workdays: on ? sch.workdays.filter((x: number) => x !== n) : [...sch.workdays, n].sort() })} className={`rounded-md px-2.5 py-1 font-semibold ${on ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-500'}`}>{d}</button>; })}</div>
-        <p className="text-[11px] text-neutral-500">Ruxsat ichida kelgan xodim kech hisoblanmaydi; undan oshsa kechikish ish boshlanishidan hisoblanadi.</p>
+        <div className="flex flex-wrap gap-1">{WEEKDAYS.map((d, i) => { const n = i + 1; const on = n !== 7 && sch.workdays.includes(n); return <button key={d} type="button" disabled={n === 7} title={n === 7 ? 'Yakshanba avtomatik dam kuni' : undefined} onClick={() => setSch({ workdays: on ? sch.workdays.filter((x: number) => x !== n) : [...sch.workdays, n].sort() })} className={`rounded-md px-2.5 py-1 font-semibold ${n === 7 ? 'cursor-not-allowed bg-neutral-100 text-neutral-400' : on ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-500'}`}>{d}{n === 7 ? ' · dam' : ''}</button>; })}</div>
+        <p className="text-[11px] text-neutral-500">Yakshanba avtomatik dam kuni: bu kunga davomat jarimasi hisoblanmaydi. Ruxsat ichida kelgan xodim kech hisoblanmaydi; undan oshsa kechikish ish boshlanishidan hisoblanadi.</p>
 
         <h3 className="pt-2 text-sm font-bold">Jarima</h3>
         <div className="grid grid-cols-2 gap-2">
@@ -737,7 +737,7 @@ const SettingsTab: React.FC<{ employees: any[]; onError: (e: string) => void; on
               </select>
             </label>
             <button onClick={() => setS({ ...s, groups: groups.filter((_, j) => j !== i) })} className="pb-1.5 text-neutral-400 hover:text-red-600 md:col-span-1"><Trash2 className="h-4 w-4" /></button>
-            <div className="col-span-2 flex flex-wrap gap-1 md:col-span-12">{WEEKDAYS.map((d, k) => { const n = k + 1; const on = g.workdays.includes(n); return <button key={d} onClick={() => setGroup(i, { workdays: on ? g.workdays.filter((x: number) => x !== n) : [...g.workdays, n].sort() })} className={`rounded-md px-2 py-0.5 font-semibold ${on ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-500'}`}>{d}</button>; })}</div>
+            <div className="col-span-2 flex flex-wrap gap-1 md:col-span-12">{WEEKDAYS.map((d, k) => { const n = k + 1; const on = n !== 7 && g.workdays.includes(n); return <button key={d} type="button" disabled={n === 7} title={n === 7 ? 'Yakshanba avtomatik dam kuni' : undefined} onClick={() => setGroup(i, { workdays: on ? g.workdays.filter((x: number) => x !== n) : [...g.workdays, n].sort() })} className={`rounded-md px-2 py-0.5 font-semibold ${n === 7 ? 'cursor-not-allowed bg-neutral-100 text-neutral-400' : on ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-500'}`}>{d}{n === 7 ? ' · dam' : ''}</button>; })}</div>
           </div>
         ))}
         <button onClick={() => setS({ ...s, groups: [...groups, { name: 'Yangi guruh', start_from: '08:00', start_to: '09:00', end: '18:00', workdays: [1, 2, 3, 4, 5, 6], source: 'FACE_ID' }] })} className="inline-flex items-center gap-1 rounded-lg border border-neutral-300 px-2.5 py-1 font-semibold hover:bg-neutral-50"><Plus className="h-3.5 w-3.5" />Guruh qo‘shish</button>

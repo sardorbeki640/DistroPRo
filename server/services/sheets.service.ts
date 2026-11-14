@@ -278,7 +278,7 @@ export class SheetsService {
   }
 
   /** Subtracts old fine rows from the shared sheet matrix; no Telegram action is involved. */
-  static cancelPenalties(company_id: string, throughDate: string, employee_id?: string, sourceFineId?: string) {
+  static cancelPenalties(company_id: string, throughDate: string, employee_id?: string, sourceFineId?: string, fromDate?: string) {
     let queued = 0;
     const employeeName = employee_id ? db.findById('employees', employee_id)?.full_name : undefined;
     const rows = db.find('sheet_rows', r => r.company_id === company_id && r.sheet.startsWith('Jarimalar'));
@@ -291,7 +291,7 @@ export class SheetsService {
     for (const row of rows) {
       const values = row.values || [];
       const date = normalizeDate(values[0]);
-      if (!date || date > throughDate || !String(values[1] || '') || !Number(values[6]) || String(values[8] || '').toUpperCase().includes('BEKOR')) continue;
+      if (!date || date > throughDate || (fromDate && date < fromDate) || !String(values[1] || '') || !Number(values[6]) || String(values[8] || '').toUpperCase().includes('BEKOR')) continue;
       if (sourceFineId && row.id !== `${company_id}:${sourceFineId}`) continue;
       if (employeeName && values[1] !== employeeName) continue;
       // Preserve ordering and retry semantics: if delivery was pending/uncertain, send the original first,

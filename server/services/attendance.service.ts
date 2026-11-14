@@ -103,7 +103,8 @@ export class AttendanceService {
       if (!/^\d{2}:\d{2}$/.test(s?.start) || !/^\d{2}:\d{2}$/.test(s?.end) || toMinutes(s.end) <= toMinutes(s.start)) throw new Error('Ish vaqti noto‘g‘ri: boshlanishi tugashidan oldin bo‘lsin (masalan 09:00 – 18:00).');
       const grace = Number(s.grace_minutes);
       if (!Number.isInteger(grace) || grace < 0 || grace > 120) throw new Error('Kechikishga ruxsat 0–120 daqiqa bo‘lsin.');
-      const workdays = Array.from(new Set((s.workdays || []).map(Number).filter((d: number) => d >= 1 && d <= 7))).sort() as number[];
+      // Sunday is a company-wide rest day and cannot be enabled as a workday.
+      const workdays = Array.from(new Set((s.workdays || []).map(Number).filter((d: number) => d >= 1 && d <= 6))).sort() as number[];
       if (!workdays.length) throw new Error('Kamida bitta ish kuni tanlang.');
       return { start: s.start, end: s.end, grace_minutes: grace, workdays };
     };
@@ -130,7 +131,8 @@ export class AttendanceService {
       next.groups = input.groups.map((g, i) => {
         if (!g.name?.trim()) throw new Error(`${i + 1}-guruh nomini yozing.`);
         if (![g.start_from, g.start_to, g.end].every(t => /^\d{2}:\d{2}$/.test(t)) || toMinutes(g.start_to) < toMinutes(g.start_from) || toMinutes(g.end) <= toMinutes(g.start_to)) throw new Error(`${g.name}: vaqtlar noto‘g‘ri (boshlash oynasi tugashdan oldin bo‘lsin).`);
-        const workdays = Array.from(new Set((g.workdays || []).map(Number).filter(d => d >= 1 && d <= 7))).sort();
+        // Sunday is a company-wide rest day and cannot be enabled per group.
+        const workdays = Array.from(new Set((g.workdays || []).map(Number).filter(d => d >= 1 && d <= 6))).sort();
         if (!workdays.length) throw new Error(`${g.name}: ish kunlarini tanlang.`);
         if (!START_SOURCES.includes(g.source)) throw new Error(`${g.name}: ish boshlash qayerdan olinishi tanlanmagan.`);
         return { id: g.id || `grp-${Date.now()}-${i}`, name: g.name.trim(), start_from: g.start_from, start_to: g.start_to, end: g.end, workdays, source: g.source };
@@ -450,7 +452,8 @@ export class AttendanceService {
       if (v && (!firstIn || toMinutes(v.first_visit) < firstIn.minutes)) firstIn = { hhmm: v.first_visit, minutes: toMinutes(v.first_visit) };
     }
     const lastOut = outs.length ? tz(outs[outs.length - 1].at) : null;
-    const workday = plan.workdays.includes(weekday(date));
+    const dayOfWeek = weekday(date);
+    const workday = dayOfWeek !== 7 && plan.workdays.includes(dayOfWeek);
     const excused = db.find('attendance_events', e => e.employee_id === employee_id && e.date === date && e.excused === true).length > 0;
     const rulesMode = s.penalty.mode === 'RULES';
     const lateExcusable = !rulesMode || (s.rules || []).find(r => r.type === 'LATE')?.excuses_allowed !== false;
@@ -535,6 +538,8 @@ export class AttendanceService {
     }
     const excusedDates = new Set(db.find('attendance_events', e => e.company_id === company_id && e.employee_id === employee_id && !!e.excused).map(e => e.date));
     for (const v of db.find('discipline_violations', v => v.company_id === company_id && v.employee_id === employee_id && v.date.startsWith(month) && !v.cancelled_at && (!s.penalties_from || v.date >= s.penalties_from) && !excusedDates.has(v.date))) {
+      // Sundays are rest days even if an old/manual record was entered before this rule was enforced.
+      if (weekday(v.date) === 7) continue;
       if (rules.has(v.type)) list.push({ date: v.date, type: v.type, source: 'MANUAL', id: v.id, note: v.note, percent: 0 });
     }
     list.sort((a, b) => a.date.localeCompare(b.date));
@@ -649,6 +654,16 @@ export class AttendanceService {
     if (Number(today.slice(8, 10)) <= 3) months.unshift(new Date(Date.parse(`${today.slice(0, 8)}01T12:00:00Z`) - 86_400_000).toISOString().slice(0, 7));
     let queued = 0;
     for (const s of db.find('attendance_settings', x => (!company_id || x.company_id === company_id) && !!x.sheets?.enabled && !!x.sheets.url)) {
+      // Reconcile any Sunday fines already queued/sent to Sheets; this only writes a Sheet cancellation row.
+      const sheetFineRows = db.find('sheet_rows', row => row.company_id === s.company_id && row.sheet.startsWith('Jarimalar') && Number(row.values?.[6]) > 0 && !String(row.values?.[8] || '').toUpperCase().includes('BEKOR'));
+      for (const row of sheetFineRows) {
+        const rawDate = String(row.values?.[0] || '').trim();
+        const match = rawDate.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : match ? `${match[3]}-${match[2]}-${match[1]}` : '';
+        if (date && weekday(date) === 7 && !db.findById('sheet_rows', `${s.company_id}:pencx:${row.id.slice(`${s.company_id}:`.length)}`)) {
+          SheetsService.cancelPenalties(s.company_id, date, undefined, undefined, date);
+        }
+      }
       const names = new Map(db.find('employees', e => e.company_id === s.company_id).map(e => [e.id, e]));
       const stamp = now.toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' });
       const ids = new Set([...this.tracked(s.company_id, s).map(t => t.employee_id), ...db.find('discipline_violations', v => v.company_id === s.company_id && months.some(m => v.date.startsWith(m))).map(v => v.employee_id)]);
@@ -712,6 +727,7 @@ export class AttendanceService {
     if (!rule) throw new Error('Bu qoida yoqilmagan.');
     if (!input.note || input.note.trim().length < 3) throw new Error('Nima bo‘lganini qisqa yozing.');
     if (input.date > businessToday()) throw new Error('Kelajak sanasi bo‘lmaydi.');
+    if (weekday(input.date) === 7) throw new Error('Yakshanba dam kuni — bu sanaga jarima yozilmaydi.');
     const currentSettings = this.settings(company_id);
     if (currentSettings.penalties_from && input.date < currentSettings.penalties_from) throw new Error('Jarima tarixi tozalangan sanadan oldingi jarimalar qayta kiritilmaydi.');
     const v = db.insert('discipline_violations', { id: `viol-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, company_id, employee_id: input.employee_id, date: input.date, type: input.type, note: input.note.trim().slice(0, 300), created_by: actor.id, created_at: new Date().toISOString() });
