@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { KeyRound, UserCircle, X } from 'lucide-react';
 import { api } from '../../services/api.ts';
 import { ChangePasswordModal } from './ChangePasswordModal.tsx';
@@ -32,10 +33,10 @@ export const ProfileModal: React.FC<{ onClose: () => void; onSaved: () => void }
     </label>
   );
 
-  if (password) return <ChangePasswordModal onCancel={() => setPassword(false)} onDone={() => { setPassword(false); setSaved(true); }} />;
+  if (password) return createPortal(<ChangePasswordModal onCancel={() => setPassword(false)} onDone={() => { setPassword(false); setSaved(true); }} />, document.body);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
+    createPortal(<div className="fixed inset-0 z-[80] flex items-center justify-center overflow-y-auto bg-black/50 p-3 sm:p-4" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
       <form onSubmit={save} className="my-auto max-h-[calc(100dvh-1.5rem)] w-full max-w-md space-y-4 overflow-y-auto overscroll-contain rounded-2xl bg-white p-5 shadow-2xl sm:max-h-[calc(100dvh-2rem)] sm:p-6">
         <div className="flex items-center justify-between">
           <h2 id="profile-modal-title" className="flex items-center gap-2 text-base font-bold"><UserCircle className="h-5 w-5" />Profilim</h2>
@@ -59,6 +60,6 @@ export const ProfileModal: React.FC<{ onClose: () => void; onSaved: () => void }
           <button type="submit" disabled={busy || !form} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50">{busy ? 'Saqlanmoqda…' : 'Saqlash'}</button>
         </div>
       </form>
-    </div>
+    </div>, document.body)
   );
 };
