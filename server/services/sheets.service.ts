@@ -71,6 +71,32 @@ function doPost(e) {
           fineSheet.appendRow(['Xodim', 'Jami']);
           fineHeaders = ['Xodim', 'Jami'];
         }
+        const normalizeDate = function (value) {
+          if (value instanceof Date && !isNaN(value.getTime())) return Utilities.formatDate(value, ss.getSpreadsheetTimeZone() || Session.getScriptTimeZone(), 'yyyy-MM-dd');
+          const text = String(value || '').trim();
+          const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          if (iso) return iso[0];
+          const local = text.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+          return local ? local[3] + '-' + local[2] + '-' + local[1] : text;
+        };
+        // Consolidate duplicate date columns left by Sheets auto-converting date headers to Date values.
+        const seenDateCols = new Map();
+        const duplicateDateCols = [];
+        fineHeaders.forEach(function (value, index) {
+          const key = normalizeDate(value);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) return;
+          const firstCol = seenDateCols.get(key);
+          if (!firstCol) { seenDateCols.set(key, index + 1); return; }
+          const lastRow = fineSheet.getLastRow();
+          if (lastRow > 1) {
+            const firstValues = fineSheet.getRange(2, firstCol, lastRow - 1, 1).getValues();
+            const duplicateValues = fineSheet.getRange(2, index + 1, lastRow - 1, 1).getValues();
+            fineSheet.getRange(2, firstCol, lastRow - 1, 1).setValues(firstValues.map(function (r, i) { return [(Number(r[0]) || 0) + (Number(duplicateValues[i][0]) || 0) || '']; }));
+          }
+          duplicateDateCols.push(index + 1);
+        });
+        duplicateDateCols.sort(function (a, b) { return b - a; }).forEach(function (col) { fineSheet.deleteColumn(col); });
+        if (duplicateDateCols.length) fineHeaders = fineSheet.getRange(1, 1, 1, Math.max(2, fineSheet.getLastColumn())).getValues()[0];
         const ledgerName = '_DistroPro Jarima ID';
         let ledger = ss.getSheetByName(ledgerName);
         if (!ledger) {
@@ -83,32 +109,25 @@ function doPost(e) {
         const ledgerIndex = new Map();
         ledgerRows.forEach(function (r, i) { ledgerIndex.set(String(r[0]), i + 2); });
         const dailyTotals = new Map();
-        const totalKey = function (date, employee) { return String(employee) + '\u001f' + String(date); };
+        const totalKey = function (date, employee) { return String(employee) + '\u001f' + normalizeDate(date); };
         ledgerRows.forEach(function (r) {
           const k = totalKey(r[1], r[2]);
           dailyTotals.set(k, (dailyTotals.get(k) || 0) + (Number(r[3]) || 0));
         });
         g.rows.forEach(function (row, rowIndex) {
-          const date = String(row[0] || '');
+          const date = normalizeDate(row[0]);
           const employee = String(row[1] || 'Noma’lum xodim');
           if (!date) return;
           const syncId = String((g.ids || [])[rowIndex] || '');
           if (!syncId) throw new Error('Jarima satrida takrorlanishni oldini oluvchi ID yo‘q.');
-          let dateCol = fineHeaders.indexOf(date) + 1;
+          let dateCol = fineHeaders.findIndex(function (value) { return normalizeDate(value) === date; }) + 1;
           let totalCol = fineHeaders.indexOf('Jami') + 1;
           if (!dateCol) {
             if (!totalCol) { totalCol = fineHeaders.length + 1; fineSheet.getRange(1, totalCol).setValue('Jami'); }
-            const dateKey = function (v) {
-              const value = String(v || '');
-              const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-              if (iso) return Number(iso[1] + iso[2] + iso[3]);
-              const local = value.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
-              return local ? Number(local[3] + local[2] + local[1]) : Number.MAX_SAFE_INTEGER;
-            };
             dateCol = 2;
-            while (dateCol < totalCol && dateKey(fineHeaders[dateCol - 1]) <= dateKey(date)) dateCol++;
+            while (dateCol < totalCol && normalizeDate(fineHeaders[dateCol - 1]) <= date) dateCol++;
             fineSheet.insertColumnBefore(dateCol);
-            fineSheet.getRange(1, dateCol).setValue(date);
+            fineSheet.getRange(1, dateCol).setNumberFormat('@').setValue(date);
             fineHeaders.splice(dateCol - 1, 0, date);
             totalCol++;
           }
@@ -118,7 +137,7 @@ function doPost(e) {
           const amount = Number(row[6]) || 0;
           const cancelled = String(row[8] || '').toUpperCase().indexOf('BEKOR') >= 0;
           const oldAmount = Number(fineSheet.getRange(employeeRow, dateCol).getValue()) || 0;
-          const hasDateLedger = ledgerRows.some(function (r) { return String(r[1]) === date && String(r[2]) === employee; });
+          const hasDateLedger = ledgerRows.some(function (r) { return normalizeDate(r[1]) === date && String(r[2]) === employee; });
           if (!hasDateLedger && oldAmount !== 0) {
             const baselineId = 'baseline:' + employee + ':' + date;
             if (!ledgerIndex.has(baselineId)) {
@@ -149,7 +168,7 @@ function doPost(e) {
           const key = totalKey(date, employee);
           dailyTotals.set(key, (dailyTotals.get(key) || 0) + signedAmount);
           const totalForDate = Math.round((dailyTotals.get(key) || 0) * 100) / 100;
-          fineSheet.getRange(employeeRow, dateCol).setValue(totalForDate);
+          fineSheet.getRange(employeeRow, dateCol).setValue(totalForDate || '');
           totalCol = fineHeaders.indexOf('Jami') + 1;
           if (totalCol > 0) fineSheet.getRange(employeeRow, totalCol).setFormula('=SUM(B' + employeeRow + ':' + (totalCol > 2 ? columnLetter(totalCol - 1) : 'B') + employeeRow + ')');
           added++;
@@ -256,6 +275,36 @@ export class SheetsService {
     if (db.findById('sheet_rows', key)) return false;
     db.insert('sheet_rows', { id: key, company_id, sheet, values, status: 'PENDING', attempts: 0, created_at: new Date().toISOString(), sent_at: null });
     return true;
+  }
+
+  /** Subtracts old fine rows from the shared sheet matrix; no Telegram action is involved. */
+  static cancelPenalties(company_id: string, throughDate: string, employee_id?: string, sourceFineId?: string) {
+    let queued = 0;
+    const employeeName = employee_id ? db.findById('employees', employee_id)?.full_name : undefined;
+    const rows = db.find('sheet_rows', r => r.company_id === company_id && r.sheet.startsWith('Jarimalar'));
+    const normalizeDate = (raw: unknown) => {
+      const value = String(raw || '').trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+      const local = value.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+      return local ? `${local[3]}-${local[2]}-${local[1]}` : '';
+    };
+    for (const row of rows) {
+      const values = row.values || [];
+      const date = normalizeDate(values[0]);
+      if (!date || date > throughDate || !String(values[1] || '') || !Number(values[6]) || String(values[8] || '').toUpperCase().includes('BEKOR')) continue;
+      if (sourceFineId && row.id !== `${company_id}:${sourceFineId}`) continue;
+      if (employeeName && values[1] !== employeeName) continue;
+      // Preserve ordering and retry semantics: if delivery was pending/uncertain, send the original first,
+      // then its offset row. A failed source is retried before the offset for the same reason.
+      if (row.status === 'FAILED') db.update('sheet_rows', row.id, { status: 'PENDING', attempts: 0, last_error: null, last_attempt_at: null });
+      const sourceId = row.id.slice(`${company_id}:`.length);
+      const cancelValues = [...values];
+      cancelValues[5] = 'Sababli bekor qilindi';
+      cancelValues[8] = 'BEKOR QILINDI';
+      cancelValues[9] = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' });
+      if (this.queue(company_id, `pencx:${sourceId}`, 'Jarimalar', cancelValues)) queued++;
+    }
+    return queued;
   }
 
   private static async post(url: string, body: unknown): Promise<{ ok: boolean; added?: number; error?: string }> {

@@ -525,13 +525,16 @@ export class AttendanceService {
     const rules = new Map((s.rules || []).filter(r => r.active).map(r => [r.type, r]));
     const list: { date: string; type: ViolationType; source: 'AUTO' | 'MANUAL'; id?: string; note?: string; minutes?: number; percent: number }[] = [];
     for (const r of this.days(company_id, s, `${month}-01`, last, employee_id)) {
-      // Respect the per-rule permission: an excuse clears only the penalty types that allow it.
-      if (rules.has('LATE') && r.late_minutes > 0 && (!r.excused || rules.get('LATE')!.excuses_allowed === false)) list.push({ date: r.date, type: 'LATE', source: 'AUTO', minutes: r.late_minutes, percent: 0 });
+      if (s.penalties_from && r.date < s.penalties_from) continue;
+      // An admin-approved reason clears every penalty for this employee on this date.
+      if (r.excused) continue;
+      if (rules.has('LATE') && r.late_minutes > 0) list.push({ date: r.date, type: 'LATE', source: 'AUTO', minutes: r.late_minutes, percent: 0 });
       if (rules.has('ABSENT') && r.status === 'ABSENT') list.push({ date: r.date, type: 'ABSENT', source: 'AUTO', percent: 0 });
       // An excused day without a start is a permitted absence only where the rule accepts excuses.
       if (rules.has('ABSENT') && r.status === 'EXCUSED' && !r.first_in && rules.get('ABSENT')!.excuses_allowed === false) list.push({ date: r.date, type: 'ABSENT', source: 'AUTO', percent: 0 });
     }
-    for (const v of db.find('discipline_violations', v => v.company_id === company_id && v.employee_id === employee_id && v.date.startsWith(month) && !v.cancelled_at)) {
+    const excusedDates = new Set(db.find('attendance_events', e => e.company_id === company_id && e.employee_id === employee_id && !!e.excused).map(e => e.date));
+    for (const v of db.find('discipline_violations', v => v.company_id === company_id && v.employee_id === employee_id && v.date.startsWith(month) && !v.cancelled_at && (!s.penalties_from || v.date >= s.penalties_from) && !excusedDates.has(v.date))) {
       if (rules.has(v.type)) list.push({ date: v.date, type: v.type, source: 'MANUAL', id: v.id, note: v.note, percent: 0 });
     }
     list.sort((a, b) => a.date.localeCompare(b.date));
@@ -564,6 +567,7 @@ export class AttendanceService {
     } else {
       const capUsed = new Map<string, number>();
       for (const r of rows.sort((a, b) => a.date.localeCompare(b.date))) {
+        if (r.excused || (s.penalties_from && r.date < s.penalties_from)) continue;
         let penalty = this.penaltyFor(s, r.late_minutes, r.early_minutes);
         if (s.penalty.monthly_cap > 0) {
           const key = `${r.employee_id}|${r.date.slice(0, 7)}`;
@@ -708,6 +712,8 @@ export class AttendanceService {
     if (!rule) throw new Error('Bu qoida yoqilmagan.');
     if (!input.note || input.note.trim().length < 3) throw new Error('Nima bo‘lganini qisqa yozing.');
     if (input.date > businessToday()) throw new Error('Kelajak sanasi bo‘lmaydi.');
+    const currentSettings = this.settings(company_id);
+    if (currentSettings.penalties_from && input.date < currentSettings.penalties_from) throw new Error('Jarima tarixi tozalangan sanadan oldingi jarimalar qayta kiritilmaydi.');
     const v = db.insert('discipline_violations', { id: `viol-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, company_id, employee_id: input.employee_id, date: input.date, type: input.type, note: input.note.trim().slice(0, 300), created_by: actor.id, created_at: new Date().toISOString() });
     AuditService.log({ company_id, user_id: actor.id, user_email: actor.email, action: 'CREATE', entity: 'DisciplineViolation', entity_id: v.id, old_value: null, new_value: { employee: employee.full_name, date: v.date, type: v.type }, reason: `${rule.label}: ${employee.full_name} — ${v.note}` });
     const percent = this.occurrences(company_id, employee.id, v.date.slice(0, 7)).find(o => o.id === v.id)?.percent;
@@ -722,18 +728,23 @@ export class AttendanceService {
     if (!reason || reason.trim().length < 3) throw new Error('Bekor qilish sababini yozing.');
     db.update('discipline_violations', id, { cancelled_at: new Date().toISOString(), cancelled_by: actor.id, cancel_reason: reason.trim() });
     AuditService.log({ company_id, user_id: actor.id, user_email: actor.email, action: 'CANCEL', entity: 'DisciplineViolation', entity_id: id, old_value: { type: v.type, date: v.date }, new_value: null, reason: `Qoidabuzarlik bekor qilindi: ${reason.trim()}` });
-    StaffBotService.notify(company_id, { employee_id: v.employee_id }, 'VIOLATION', '✅ Qoidabuzarlik bekor qilindi',
-      `${v.date.split('-').reverse().join('.')}: ${escapeHtml(VIOLATION_LABEL[v.type])} — ushlanma olib tashlandi.\nSabab: ${escapeHtml(reason.trim())}`);
-    StaffBotService.postPenaltyCancelled(company_id, v, reason.trim());
-    // Already in the sheet: a "cancelled" row under it (rows are only appended there).
-    if (db.findById('sheet_rows', `${company_id}:pen:${v.employee_id}:${v.date}:${v.type}:${v.id}`)) {
-      const e = db.findById('employees', v.employee_id);
-      const rule = (this.settings(company_id).rules || []).find(r => r.type === v.type);
-      SheetsService.queue(company_id, `pencx:${v.id}`, 'Jarimalar', [
-        v.date.split('-').reverse().join('.'), e?.full_name || '', e?.position || '', this.planOf(this.settings(company_id), v.employee_id).group?.name || '',
-        VIOLATION_LABEL[v.type], `Bekor qilindi: ${reason.trim()}`, rule?.percent || 0, '', 'BEKOR QILINDI', new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Tashkent' })
-      ]);
+    SheetsService.cancelPenalties(company_id, v.date, undefined, `pen:${v.employee_id}:${v.date}:${v.type}:${v.id}`);
+  }
+
+  /** Clears all existing fine calculations while preserving all attendance and employee records. */
+  static clearPenaltyHistory(company_id: string, actor: { id: string; email: string }) {
+    const s = this.settings(company_id);
+    const tomorrow = new Date(`${businessToday()}T12:00:00Z`);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    const from = tomorrow.toISOString().slice(0, 10);
+    const oldFrom = s.penalties_from || null;
+    const queued = SheetsService.cancelPenalties(company_id, from);
+    for (const v of db.find('discipline_violations', x => x.company_id === company_id && x.date < from && !x.cancelled_at)) {
+      db.update('discipline_violations', v.id, { cancelled_at: new Date().toISOString(), cancelled_by: actor.id, cancel_reason: 'Jarima tarixi administrator tomonidan tozalandi' });
     }
+    db.update('attendance_settings', s.id, { penalties_from: from } as any);
+    AuditService.log({ company_id, user_id: actor.id, user_email: actor.email, action: 'DELETE', entity: 'PenaltyHistory', entity_id: company_id, old_value: { penalties_from: oldFrom }, new_value: { penalties_from: from, sheet_cancellations_queued: queued }, reason: 'Oldingi jarimalar tozalandi; davomat yozuvlari saqlandi' });
+    return { penalties_from: from, sheet_cancellations_queued: queued };
   }
 
   /** Where violations are posted: work group chats, each employee's own chat (an agent's group), and the chats to choose from. */
@@ -773,10 +784,6 @@ export class AttendanceService {
     const out: any[] = [];
     for (const id of tracked) {
       for (const o of this.occurrences(company_id, id, month, s)) out.push({ ...o, employee_id: id, employee_name: names.get(id) || id, label: VIOLATION_LABEL[o.type] });
-    }
-    // Cancelled manual ones are listed too (for the record).
-    for (const v of db.find('discipline_violations', v => v.company_id === company_id && v.date.startsWith(month) && !!v.cancelled_at)) {
-      out.push({ date: v.date, type: v.type, source: 'MANUAL', id: v.id, note: v.note, percent: 0, cancelled: true, cancel_reason: v.cancel_reason, employee_id: v.employee_id, employee_name: names.get(v.employee_id) || v.employee_id, label: VIOLATION_LABEL[v.type] });
     }
     return out.sort((a, b) => b.date.localeCompare(a.date));
   }
@@ -868,7 +875,7 @@ export class AttendanceService {
       });
     }
     AuditService.log({ company_id, user_id: actor.id, user_email: actor.email, action: 'UPDATE', entity: 'Attendance', entity_id: `${employee_id}:${date}`, old_value: null, new_value: { excused }, reason: `${employee.full_name}, ${date}: ${excused ? 'uzrli deb belgilandi' : 'uzr bekor qilindi'} — ${reason.trim()}` });
-    if (excused) StaffBotService.postAbsenceExcused(company_id, employee_id, date, reason.trim());
+    if (excused) SheetsService.cancelPenalties(company_id, date, employee_id);
   }
 
   static photoPath(company_id: string, id: string): string {

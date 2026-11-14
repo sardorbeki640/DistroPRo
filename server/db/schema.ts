@@ -986,6 +986,8 @@ export interface AttendanceSettings {
   employee_day_start_times?: Record<string, Record<string, string>>;
   // RULES: percent of the month's earned salary by the discipline rules below (company rule book).
   penalty: { mode: 'NONE' | 'FIXED' | 'PER_MINUTE' | 'RULES'; amount: number; early_leave: boolean; monthly_cap: number };
+  /** Historical penalties were cleared; attendance records remain intact. */
+  penalties_from?: string;
   rules?: DisciplineRule[];
   groups?: WorkGroup[];
   /** Telegram group ID that records round-video attendance for each work group. */

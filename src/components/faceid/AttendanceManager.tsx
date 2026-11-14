@@ -158,6 +158,7 @@ const ViolationsTab: React.FC<{ employees: any[]; isAdmin: boolean; onError: (e:
   const [list, setList] = useState<any[]>([]);
   const [q, setQ] = useState('');
   const [type, setType] = useState('');
+  const [clearing, setClearing] = useState(false);
   const [form, setForm] = useState({ employee_id: '', date: localToday(), type: 'NASIYA_MISUSE', note: '' });
   const load = () => api.attendance.violations(month).then(r => setList(r.violations)).catch(e => onError(e.message));
   useEffect(() => { load(); }, [month]);
@@ -180,8 +181,21 @@ const ViolationsTab: React.FC<{ employees: any[]; isAdmin: boolean; onError: (e:
       onFlash('Jarima bekor qilindi.'); load();
     } catch (err: any) { onError(err.message); }
   };
+  const clearHistory = async () => {
+    if (!window.confirm('Bugungacha hisoblangan barcha jarimalarni dasturdan olib tashlaysizmi? Davomat yozuvlari saqlanadi, jarima hisoblash ertadan davom etadi.')) return;
+    setClearing(true);
+    try {
+      const result = await api.attendance.clearPenaltyHistory();
+      onFlash(`Eski jarimalar tozalandi. Yangi hisob ${result.penalties_from.split('-').reverse().join('.')} sanasidan boshlanadi. Sheets bekor qilish yozuvlari navbatga qo‘yildi.`);
+      load();
+    } catch (err: any) { onError(err.message); } finally { setClearing(false); }
+  };
   return (
     <div className="space-y-3">
+      {isAdmin && <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+        <span>Tarixiy jarimalarni tozalash davomat ma’lumotlariga tegmaydi; jarima hisoblash ertadan yangidan boshlanadi.</span>
+        <button type="button" disabled={clearing} onClick={clearHistory} className="rounded-lg border border-amber-300 bg-white px-3 py-2 font-semibold disabled:opacity-50">{clearing ? 'Tozalanmoqda…' : 'Eski jarimalarni tozalash'}</button>
+      </div>}
       {isAdmin && <form onSubmit={add} className="grid grid-cols-1 gap-2 rounded-2xl border border-neutral-200 bg-white p-3 text-xs md:grid-cols-6">
         <select required className={`${input} md:col-span-2`} value={form.employee_id} onChange={e => setForm({ ...form, employee_id: e.target.value })}>
           <option value="">Xodim…</option>

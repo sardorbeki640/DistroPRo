@@ -402,6 +402,8 @@ export const api = {
       fetchApi('/api/attendance/violations', { method: 'POST', body: JSON.stringify(v) }),
     cancelViolation: (id: string, reason: string): Promise<any> =>
       fetchApi(`/api/attendance/violations/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }),
+    clearPenaltyHistory: (): Promise<{ penalties_from: string; sheet_cancellations_queued: number }> =>
+      fetchApi('/api/attendance/penalties/clear-history', { method: 'POST' }),
     syncVisits: (from: string, to: string): Promise<{ message: string }> => fetchApi('/api/attendance/sync-visits', { method: 'POST', body: JSON.stringify({ from, to }) }),
     agents: (): Promise<{ agents: { id: string; name: string; code: string }[] }> => fetchApi('/api/attendance/agents'),
     /** The selfie of a check, fetched with the login token (an <img src> could not send it). */

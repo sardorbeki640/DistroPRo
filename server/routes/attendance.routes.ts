@@ -158,6 +158,14 @@ router.post('/violations', requireAuth, requirePermission('employee', 'update'),
 router.post('/violations/:id/cancel', requireAuth, requirePermission('employee', 'update'), requireOwner, async (req, res, next) => {
   try { AttendanceService.cancelViolation(req.user!.companyId, req.params.id, String(req.body?.reason || ''), who(req)); await db.flushTurso(); res.json({ success: true }); } catch (e) { next(e); }
 });
+router.post('/penalties/clear-history', requireAuth, requirePermission('employee', 'update'), requireOwner, async (req, res, next) => {
+  try {
+    const result = AttendanceService.clearPenaltyHistory(req.user!.companyId, who(req));
+    await db.flushTurso();
+    const sync = await SheetsService.flush();
+    res.json({ success: true, ...result, sheet_rows_sent: sync.sent });
+  } catch (e) { next(e); }
+});
 /** Pulls agents' first visits from SalesDoc for a period now (the scheduler does today every 10 minutes). */
 router.post('/sync-visits', requireAuth, requirePermission('employee', 'update'), async (req, res, next) => {
   try {
