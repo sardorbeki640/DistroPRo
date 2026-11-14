@@ -31,5 +31,7 @@ services:
         sync: false
       - key: OWNER_EMAIL
         sync: false
+      - key: OWNER_LOGIN
+        sync: false
       - key: OWNER_PASSWORD
         sync: false

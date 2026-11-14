@@ -9,7 +9,8 @@ interface LoginModalProps {
 }
 
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => {
-  const [email, setEmail] = useState('');
+  const [login, setLogin] = useState('');
+  const [ownerEmail, setOwnerEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,12 +64,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => 
 
     try {
       if (setupRequired) {
-        const response = await fetch('/api/auth/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,setup_token:setupToken})});
+        const response = await fetch('/api/auth/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({login,email:ownerEmail || undefined,password,setup_token:setupToken})});
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || body.message || 'Hisob yaratilmadi');
         setSetupRequired(false);
       }
-      const res = await api.login(email, password);
+      const res = await api.login(login, password);
       onSuccess(res.user);
     } catch (err: any) {
       setError(err.message || 'Kirishda xatolik yuz berdi');
@@ -93,8 +94,8 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => 
         </div>
 
         <div className="p-6">
-          {setupRequired && <p className="mb-4 text-sm text-amber-800">Birinchi sozlash: o‘zingizning emailingiz va kamida 12 belgili yangi parolni kiriting. Sinov hisoblari o‘chiriladi. Biznes yozuvlari saqlanadi.</p>}
-          {setupRequired && setupMode === 'environment' && <div className="mb-4 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">Serverda egasi hisobini yaratish bloklangan. Render Environment bo‘limida OWNER_EMAIL va OWNER_PASSWORD ni sozlang yoki OWNER_SETUP_TOKEN qo‘shib, serverni qayta ishga tushiring.</div>}
+          {setupRequired && <p className="mb-4 text-sm text-amber-800">Birinchi sozlash: login va kamida 12 belgili yangi parol kiriting. Email ixtiyoriy. Sinov hisoblari o‘chiriladi. Biznes yozuvlari saqlanadi.</p>}
+          {setupRequired && setupMode === 'environment' && <div className="mb-4 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">Serverda egasi hisobini yaratish bloklangan. Render Environment bo‘limida OWNER_LOGIN va OWNER_PASSWORD ni sozlang yoki OWNER_SETUP_TOKEN qo‘shib, serverni qayta ishga tushiring.</div>}
           <div className="mb-5 flex items-center gap-2 rounded-lg bg-emerald-50 p-3 text-xs text-emerald-800">
             <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600" />
             <span>Tizim RBAC va audit xavfsizlik protokollari bilan himoyalangan.</span>
@@ -120,21 +121,26 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onSuccess }) => 
               <input type="password" autoComplete="off" value={setupToken} onChange={e=>setSetupToken(e.target.value)} required className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-xs focus:border-emerald-600 focus:outline-none" />
             </div>}
             <div>
-              <label className="mb-1 block text-xs font-medium text-neutral-700">{setupRequired ? 'Elektron pochta' : 'Email yoki login'}</label>
+              <label className="mb-1 block text-xs font-medium text-neutral-700">Login</label>
               <div className="relative">
                 <Mail className="absolute top-2.5 left-3 h-4 w-4 text-neutral-400" />
                 <input
-                  type={setupRequired ? "email" : "text"}
-                  name="username"
+                  type="text"
+                  name="login"
                   autoComplete="username"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  value={login}
+                  onChange={(e) => setLogin(e.target.value)}
                   required
-                  placeholder={setupRequired ? "nomi@distro.uz" : "nomi@distro.uz yoki 901234567"}
+                  placeholder="masalan: sardor yoki 901234567"
                   className="w-full rounded-lg border border-neutral-200 py-2 pr-3 pl-9 text-xs focus:border-emerald-600 focus:outline-none"
                 />
               </div>
             </div>
+
+            {setupRequired && <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-700">Email (ixtiyoriy)</label>
+              <input type="email" name="email" autoComplete="email" value={ownerEmail} onChange={e => setOwnerEmail(e.target.value)} placeholder="nomi@distro.uz" className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-xs focus:border-emerald-600 focus:outline-none" />
+            </div>}
 
             <div>
               <label className="mb-1 block text-xs font-medium text-neutral-700">Parol</label>

@@ -29,7 +29,9 @@ router.post('/setup', (req,res,next) => {
     res.status(403).json({error:'Serverda ilk sozlash uchun Render’da OWNER_EMAIL va OWNER_PASSWORD kiriting yoki OWNER_SETUP_TOKEN (kamida 32 belgi) sozlang.'}); return;
   }
   try {
-    SetupService.createOwner(String(req.body.email || '').trim(),String(req.body.password || ''));
+    const login = String(req.body.login || req.body.email || '').trim();
+    const email = String(req.body.email || '').trim();
+    SetupService.createOwner(login, String(req.body.password || ''), email && email !== login ? email : undefined);
     res.json({success:true});
   } catch(error) {next(error);}
 });
@@ -38,7 +40,7 @@ router.post('/login', async (req: Request, res: Response, next) => {
   try {
     if (process.env.NODE_ENV !== 'test' && SetupService.required()) {res.status(403).json({error:'Avval korxona egasi hisobini yarating'});return;}
     const validated = LoginSchema.parse(req.body);
-    const result = await AuthService.login(validated.email, validated.password, req.ip);
+    const result = await AuthService.login(validated.login || validated.email || '', validated.password, req.ip);
     res.json({
       success: true,
       token: result.token,

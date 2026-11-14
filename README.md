@@ -22,13 +22,13 @@ pnpm start
 
 The production service must use the same `JWT_SECRET` on every restart. It encrypts saved integration credentials as well as signing login tokens. Changing it after setup makes previously saved integration credentials unreadable.
 
-For a new, empty database, set `OWNER_EMAIL` and `OWNER_PASSWORD` before the first start. The initial owner password must be at least 12 characters. Keep `.env.local`, the SQLite database, photos, and backups private; they contain business data and credentials.
+For a new, empty database, set `OWNER_LOGIN` and `OWNER_PASSWORD` before the first start. `OWNER_EMAIL` is optional. The initial owner password must be at least 12 characters. Keep `.env.local`, the SQLite database, photos, and backups private; they contain business data and credentials.
 
 ## Render and Turso
 
 Configure `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` as Render secret environment variables. The first connection preserves existing local SQLite rows when the Turso app table is empty; after that, Turso is the startup source of truth. Rows are stored in `distropro_rows` with their application table name and JSON payload. Successful write API responses wait for Turso confirmation.
 
-For a first owner setup on a hosted service, configure a random `OWNER_SETUP_TOKEN` with at least 32 characters in Render, then enter it in the setup screen along with the owner email and a new password. Alternatively, set `OWNER_EMAIL` and `OWNER_PASSWORD` in Render to create the owner automatically on startup. Never paste Turso or setup tokens into source control or chat.
+For a first owner setup on a hosted service, configure a random `OWNER_SETUP_TOKEN` with at least 32 characters in Render, then enter it in the setup screen along with an owner login and a new password; email is optional. Alternatively, set `OWNER_LOGIN` and `OWNER_PASSWORD` in Render to create the owner automatically on startup. Existing `OWNER_EMAIL` configuration is still accepted. Never paste database or setup tokens into source control or chat.
 
 ## Production server
 

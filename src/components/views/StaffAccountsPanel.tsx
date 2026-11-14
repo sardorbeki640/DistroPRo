@@ -73,7 +73,7 @@ export const StaffAccountsPanel: React.FC = () => {
     try { await api.setStaffRole(row.account.user_id, role); load(); } catch (err: any) { setError(err.message); }
   };
 
-  // Profile of a staff member: card (name, position, phone) and account (login, email) together.
+  // Profile of a staff member: card (name, position, phone) and account (login, optional email) together.
   const [editing, setEditing] = useState<any | null>(null);
   const [profile, setProfile] = useState({ full_name: '', position: '', phone: '', login: '', email: '' });
   const openEdit = (row: any) => {
@@ -86,7 +86,7 @@ export const StaffAccountsPanel: React.FC = () => {
     try {
       await api.updateStaffProfile(editing.employee.id, {
         full_name: profile.full_name, position: profile.position, phone: profile.phone,
-        ...(editing.account ? { login: profile.login, email: profile.email } : {})
+        ...(editing.account ? { login: profile.login, ...(profile.email.trim() ? { email: profile.email.trim() } : {}) } : {})
       });
       setEditing(null);
       load();
@@ -158,11 +158,11 @@ export const StaffAccountsPanel: React.FC = () => {
                 <label className="block text-[11px] font-semibold">Login
                   <input required maxLength={60} className={input} value={profile.login} onChange={e => setProfile(p => ({ ...p, login: e.target.value.trim() }))} />
                 </label>
-                <label className="block text-[11px] font-semibold">Email
-                  <input required type="email" maxLength={120} className={input} value={profile.email} onChange={e => setProfile(p => ({ ...p, email: e.target.value.trim() }))} />
+                <label className="block text-[11px] font-semibold">Email (ixtiyoriy)
+                  <input type="email" maxLength={120} className={input} value={profile.email} onChange={e => setProfile(p => ({ ...p, email: e.target.value.trim() }))} />
                 </label>
               </>
-            ) : <p className="text-[11px] text-neutral-500">Kirish hisobi yo‘q — login va email hisob berilgandan keyin tahrirlanadi.</p>}
+            ) : <p className="text-[11px] text-neutral-500">Kirish hisobi yo‘q — login hisob berilgandan keyin tahrirlanadi; email ixtiyoriy.</p>}
             <p className="text-[11px] text-neutral-500">Ism va telefon xodim kartasi, kirish hisobi va agent yozuvida birga yangilanadi. Egasi hisobini faqat egasi o‘zgartiradi.</p>
             <div className="flex justify-end"><button className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700">Saqlash</button></div>
           </form>

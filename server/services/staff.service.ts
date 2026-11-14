@@ -30,8 +30,8 @@ export class StaffService {
         customers: agent ? db.find('customers', c => c.company_id === companyId && c.agent_id === agent.id).length : 0,
         account: user ? {
           user_id: user.id,
-          login: user.login || user.email,
-          email: user.email,
+          login: user.login || user.email.split('@')[0],
+          email: user.email.endsWith('@noemail.local') || user.email.endsWith('@xodim.local') ? '' : user.email,
           status: user.status,
           roles: userRoles.filter(ur => ur.user_id === user.id).map(ur => roles.get(ur.role_id)).filter(Boolean).map(r => ({ id: r!.id, name: r!.name })),
           must_change_password: !!user.must_change_password,
@@ -132,14 +132,16 @@ export class StaffService {
     if (input.login !== undefined) {
       const login = input.login.trim().toLowerCase();
       if (!/^[a-z0-9._@+\-]{3,60}$/.test(login)) throw new Error('Login 3–60 belgi: lotin harflari, raqam, nuqta, chiziqcha.');
-      if (db.findOne('users', u => u.id !== userId && ((u.login || '').toLowerCase() === login || u.email.toLowerCase() === login))) throw new Error('Bu login band. Boshqasini tanlang.');
+      if (db.findOne('users', u => u.id !== userId && ((u.login || '').toLowerCase() === login || u.email.toLowerCase() === login || (!u.login && u.email.split('@')[0].toLowerCase() === login)))) throw new Error('Bu login band. Boshqasini tanlang.');
       out.login = login;
     }
     if (input.email !== undefined) {
       const email = input.email.trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Email noto‘g‘ri.');
-      if (db.findOne('users', u => u.id !== userId && (u.email.toLowerCase() === email || (u.login || '').toLowerCase() === email))) throw new Error('Bu email boshqa hisobda bor.');
-      out.email = email;
+      if (email) {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Email noto‘g‘ri.');
+        if (db.findOne('users', u => u.id !== userId && (u.email.toLowerCase() === email || (u.login || '').toLowerCase() === email))) throw new Error('Bu email boshqa hisobda bor.');
+        out.email = email;
+      }
     }
     void companyId;
     return out;
@@ -170,10 +172,10 @@ export class StaffService {
   static myProfile(userId: string, companyId: string) {
     const user = db.findById('users', userId)!;
     const employee = user.employee_id ? db.findById('employees', user.employee_id) : db.findOne('employees', e => e.company_id === companyId && e.user_id === userId);
-    return { full_name: user.full_name, phone: user.phone || employee?.phone || '', email: user.email, login: user.login || '', position: employee?.position || '', last_login_at: user.last_login_at || null };
+    return { full_name: user.full_name, phone: user.phone || employee?.phone || '', email: user.email.endsWith('@noemail.local') || user.email.endsWith('@xodim.local') ? '' : user.email, login: user.login || user.email.split('@')[0], position: employee?.position || '', last_login_at: user.last_login_at || null };
   }
 
-  /** Anyone signed in edits their own name, phone, login and email (position is set by the manager). */
+  /** Anyone signed in edits their own name, phone and login; email is optional (position is set by the manager). */
   static updateMyProfile(actor: { userId: string; email: string; companyId: string }, input: ProfileInput) {
     const user = db.findById('users', actor.userId);
     if (!user || user.company_id !== actor.companyId) throw new Error('Foydalanuvchi topilmadi.');

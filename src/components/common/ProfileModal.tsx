@@ -5,7 +5,7 @@ import { ChangePasswordModal } from './ChangePasswordModal.tsx';
 
 type Profile = { full_name: string; phone: string; email: string; login: string; position: string; last_login_at: string | null };
 
-/** "Profilim": anyone signed in edits their own name, phone, login and email, and changes the password. */
+/** "Profilim": anyone signed in edits their own name, phone and login; email is optional. */
 export const ProfileModal: React.FC<{ onClose: () => void; onSaved: () => void }> = ({ onClose, onSaved }) => {
   const [form, setForm] = useState<Profile | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +20,7 @@ export const ProfileModal: React.FC<{ onClose: () => void; onSaved: () => void }
     if (!form) return;
     setBusy(true); setError(null); setSaved(false);
     try {
-      const r = await api.updateMyProfile({ full_name: form.full_name, phone: form.phone, email: form.email, ...(form.login ? { login: form.login } : {}) });
+      const r = await api.updateMyProfile({ full_name: form.full_name, phone: form.phone, ...(form.email.trim() ? { email: form.email.trim() } : {}), login: form.login });
       setForm(r.profile); setSaved(true); onSaved();
     } catch (err: any) { setError(err.message); } finally { setBusy(false); }
   };
@@ -46,8 +46,8 @@ export const ProfileModal: React.FC<{ onClose: () => void; onSaved: () => void }
           <>
             {field('full_name', 'Ism familiya', { required: true, maxLength: 120 })}
             {field('phone', 'Telefon', { placeholder: '+998 90 123 45 67', maxLength: 30 })}
-            {field('login', 'Login (kirish uchun)', { placeholder: 'masalan: ali.karimov', maxLength: 60 })}
-            {field('email', 'Email', { type: 'email', required: true, maxLength: 120 })}
+            {field('login', 'Login (kirish uchun)', { placeholder: 'masalan: ali.karimov', required: true, maxLength: 60 })}
+            {field('email', 'Email (ixtiyoriy)', { type: 'email', maxLength: 120 })}
             {form.position && <p className="text-xs text-neutral-500">Lavozim: <b>{form.position}</b> (rahbar o‘zgartiradi)</p>}
             {form.last_login_at && <p className="text-[11px] text-neutral-400">Oxirgi kirish: {new Date(form.last_login_at).toLocaleString('ru-RU')}</p>}
           </>

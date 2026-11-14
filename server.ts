@@ -156,8 +156,13 @@ async function startServer() {
 
   // A cloud test server can't do the first-run setup (it is allowed only from this computer's own browser), so the
   // owner comes from the host's secret settings. On a free host whose disk is wiped it is made again after each wipe.
-  if (SetupService.required() && process.env.OWNER_EMAIL && process.env.OWNER_PASSWORD) {
-    try { SetupService.createOwner(process.env.OWNER_EMAIL.trim(), process.env.OWNER_PASSWORD); console.log('[Setup] Egasi hisobi sozlamalardan yaratildi'); }
+  if (SetupService.required() && (process.env.OWNER_LOGIN || process.env.OWNER_EMAIL) && process.env.OWNER_PASSWORD) {
+    try {
+      const configuredLogin = process.env.OWNER_LOGIN?.trim();
+      const configuredEmail = process.env.OWNER_EMAIL?.trim();
+      SetupService.createOwner(configuredLogin || configuredEmail || '', process.env.OWNER_PASSWORD, configuredLogin ? configuredEmail : undefined);
+      console.log('[Setup] Egasi hisobi sozlamalardan yaratildi');
+    }
     catch (err: any) { console.warn('[Setup] Egasi hisobi yaratilmadi:', err.message); }
   }
   databaseReady = true;

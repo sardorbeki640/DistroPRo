@@ -286,10 +286,10 @@ export const api = {
   },
 
   // Auth
-  login: async (email: string, password: string): Promise<{ token: string; user: AuthUser }> => {
+  login: async (login: string, password: string): Promise<{ token: string; user: AuthUser }> => {
     const res = await fetchApi<{ token: string; user: AuthUser }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ login, password })
     });
     setStoredToken(res.token);
     return res;

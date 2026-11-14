@@ -44,11 +44,10 @@ export interface UserWithPermissions {
 
 export class AuthService {
   /**
-   * Authenticates user by email & password and generates JWT token
+   * Authenticates user by login (legacy email identifiers remain accepted) and generates JWT token
    */
-  public static async login(email: string, password: string, clientIp?: string): Promise<{ token: string; user: UserWithPermissions }> {
-    const normalized = email.trim().toLowerCase();
-    // Staff accounts use a short login (often a phone); owners and admins use email.
+  public static async login(identifier: string, password: string, clientIp?: string): Promise<{ token: string; user: UserWithPermissions }> {
+    const normalized = identifier.trim().toLowerCase();
     const key = `${clientIp || 'local'}|${normalized}`;
     // Staff passwords may be short (6 digits): besides the per-address limit, one login is locked after 20 wrong
     // tries from anywhere, so guessing from many addresses does not work either.
@@ -61,7 +60,10 @@ export class AuthService {
       }
       if (attempts && (now - attempts.lastAttemptAt > LOGIN_WINDOW_MS || (attempts.lockedUntil > 0 && attempts.lockedUntil <= now))) LOGIN_ATTEMPTS.delete(k);
     }
-    const user = db.findOne('users', u => u.email.toLowerCase() === normalized || (!!u.login && u.login.toLowerCase() === normalized));
+    const matchingUsers = db.find('users', u => (!!u.login && u.login.toLowerCase() === normalized)
+      || u.email.toLowerCase() === normalized
+      || (!u.login && u.email.split('@')[0].toLowerCase() === normalized));
+    const user = matchingUsers.length === 1 ? matchingUsers[0] : undefined;
     const fail = (message: string) => {
       if (LOGIN_ATTEMPTS.size >= MAX_LOGIN_KEYS) {
         for (const [storedKey, value] of LOGIN_ATTEMPTS) {

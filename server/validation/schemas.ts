@@ -3,11 +3,12 @@ import { isValidIsoDate } from '../utils/date.ts';
 
 const isoDate = z.string().refine(isValidIsoDate, "Sana haqiqiy kalendar kuni (YYYY-MM-DD) bo'lishi shart");
 
-// "email" holds either an email (owner, admins) or a staff login such as a phone number.
 export const LoginSchema = z.object({
-  email: z.string().trim().min(3, 'Email yoki loginni kiriting').max(200),
+  login: z.string().trim().min(3, 'Login kamida 3 belgidan iborat bo‘lsin').max(200).optional(),
+  // Keep the old field for clients that have not refreshed yet.
+  email: z.string().trim().min(3).max(200).optional(),
   password: z.string().min(6, 'Parol kamida 6 belgidan iborat bo\'lishi kerak').max(128)
-});
+}).refine(value => !!(value.login || value.email), { message: 'Loginni kiriting', path: ['login'] });
 
 export const ChangePasswordSchema = z.object({
   current_password: z.string().min(1, 'Joriy parolni kiriting'),
