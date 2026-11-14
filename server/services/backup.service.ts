@@ -25,8 +25,8 @@ export function backupStatus() {
     extra_copy_dir: extraCopy,
     storage_notice: cloud
       ? (extraCopy
-        ? `Asosiy baza ${provider === 'neon' ? 'Neon PostgreSQL’da' : 'Turso’da'}. Bu oynadagi nusxalar qo‘lda yoki yuklab olinadigan nusxalar; Render qayta ishga tushsa lokal fayllar saqlanib qolishi kafolatlanmaydi. BACKUP_COPY_DIR nusxasi ham sozlangan.`
-        : `Asosiy baza ${provider === 'neon' ? 'Neon PostgreSQL’da' : 'Turso’da'}. Avtomatik fayl nusxasi yoqilmagan; Render qayta ishga tushsa lokal nusxalar yo‘qolishi mumkin. Nusxani hozir oling va yuklab saqlang yoki doimiy BACKUP_COPY_DIR sozlang.`)
+        ? `Asosiy baza ${provider === 'tidb' ? 'TiDB Cloud’da' : provider === 'neon' ? 'Neon PostgreSQL’da' : 'Turso’da'}. Bu oynadagi nusxalar qo‘lda yoki yuklab olinadigan nusxalar; Render qayta ishga tushsa lokal fayllar saqlanib qolishi kafolatlanmaydi. BACKUP_COPY_DIR nusxasi ham sozlangan.`
+        : `Asosiy baza ${provider === 'tidb' ? 'TiDB Cloud’da' : provider === 'neon' ? 'Neon PostgreSQL’da' : 'Turso’da'}. Avtomatik fayl nusxasi yoqilmagan; Render qayta ishga tushsa lokal nusxalar yo‘qolishi mumkin. Nusxani hozir oling va yuklab saqlang yoki doimiy BACKUP_COPY_DIR sozlang.`)
       : (extraCopy
         ? 'SQLite bazasi ishlatilmoqda; kunlik/haftalik nusxalar avtomatik olinadi va qo‘shimcha joyga ko‘chiriladi.'
         : 'SQLite bazasi ishlatilmoqda; kunlik/haftalik nusxalar avtomatik olinadi. Server diski doimiy bo‘lmasa, nusxalarni alohida joyga ham saqlang.')

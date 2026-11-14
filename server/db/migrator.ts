@@ -17,7 +17,7 @@ export class MigrationRunner {
 
   public async run(): Promise<{ executed: string[]; alreadyApplied: string[] }> {
     db.init();
-    await db.connectTurso(); // Selects Neon when NEON_DATABASE_URL is configured; otherwise keeps Turso compatibility.
+    await db.connectTurso(); // Selects TiDB, Neon, or Turso according to configured connection variables.
     const appliedRecords = db.getTable('_migrations');
     const appliedIds = new Set(appliedRecords.map((m: MigrationRecord) => m.id));
 

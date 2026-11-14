@@ -10,6 +10,7 @@
     "db:migrate:turso": "node scripts/migrate-sqlite-to-turso.mjs",
     "db:migrate:neon": "node scripts/migrate-turso-to-neon.mjs",
     "db:migrate:sqlite-to-neon": "node scripts/migrate-sqlite-to-neon.mjs",
+    "db:migrate:neon-to-tidb": "node scripts/copy-neon-to-tidb.mjs",
     "test": "node scripts/run-tests.mjs",
     "lint": "tsc --noEmit"
   },

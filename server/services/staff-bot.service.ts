@@ -5,7 +5,7 @@ import { AuditService } from './audit.service.ts';
 import { AttendanceService } from './attendance.service.ts';
 import { SalaryService } from './salary.service.ts';
 import { TelegramService, escapeHtml } from './telegram.service.ts';
-import { businessToday } from '../utils/date.ts';
+import { addDays, businessToday } from '../utils/date.ts';
 
 /**
  * Personal reminders in each employee's own Telegram chat, through the bot marked "personal" in the bot settings.
@@ -178,8 +178,13 @@ export class StaffBotService {
       const company_id = s.company_id;
       const bot = this.personalBot(company_id);
       if (!bot || s.penalty.mode !== 'RULES') continue;
+      // This worker can restart after downtime. Never backfill old violations to
+      // Telegram: group posts are a daily alert, not a historical export.
+      // An absence is detected after its workday closes, so yesterday's absence
+      // is considered a new penalty today; anything older is never replayed.
       const since = s.penalty_posts!.since || today;
-      const months = Array.from(new Set([since.slice(0, 7), today.slice(0, 7)])).sort().filter(m => m <= today.slice(0, 7));
+      const yesterday = addDays(today, -1);
+      const months = Array.from(new Set([yesterday.slice(0, 7), today.slice(0, 7)]));
       for (const t of AttendanceService.tracked(company_id, s)) {
         const chat = this.penaltyChatOf(s, t.employee_id);
         if (!chat) continue;
@@ -189,7 +194,8 @@ export class StaffBotService {
           let total = 0;
           list.forEach((o, i) => {
             total = Math.round((total + o.percent) * 100) / 100;
-            if (o.date < since || (o.type === 'ABSENT' && o.date >= today)) return;
+            const assessedToday = o.date === today || (o.type === 'ABSENT' && o.date === yesterday);
+            if (o.date < since || !assessedToday) return;
             const id = `pp-${company_id}-${t.employee_id}-${o.date}-${o.type}-${o.id || 'auto'}`;
             if (db.findById('notifications', id)) return;
             const rule = (s.rules || []).find(r => r.type === o.type);

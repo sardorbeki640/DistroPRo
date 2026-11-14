@@ -138,7 +138,7 @@ class DatabaseManager {
     const count = Number(this.sql.prepare('SELECT COUNT(*) AS n FROM rows').get().n);
     if (count === 0 && fs.existsSync(LEGACY_JSON) && fs.statSync(LEGACY_JSON).size > 0) {
       this.importLegacyJson();
-    } else if (!process.env.NEON_DATABASE_URL?.trim() && (!process.env.TURSO_DATABASE_URL?.trim() || !process.env.TURSO_AUTH_TOKEN?.trim())) {
+    } else if (!process.env.TIDB_DATABASE_URL?.trim() && !process.env.NEON_DATABASE_URL?.trim() && (!process.env.TURSO_DATABASE_URL?.trim() || !process.env.TURSO_AUTH_TOKEN?.trim())) {
       // With Turso enabled, wait to hydrate until we know which snapshot is
       // authoritative; holding both local and cloud copies can exceed a small
       // host's memory limit during startup.
@@ -205,7 +205,7 @@ class DatabaseManager {
 
   /** Connect the local SQLite cache to a Turso database and restore the cloud copy before migrations run. */
   public async connectTurso(): Promise<void> {
-    if (process.env.NEON_DATABASE_URL?.trim()) return this.connectNeon();
+    if (process.env.TIDB_DATABASE_URL?.trim() || process.env.NEON_DATABASE_URL?.trim()) return this.connectNeon();
     if (this.turso) return;
     const url = process.env.TURSO_DATABASE_URL?.trim();
     const authToken = process.env.TURSO_AUTH_TOKEN?.trim();
@@ -291,7 +291,9 @@ class DatabaseManager {
   /** Connect the local SQLite cache to Neon Postgres; the remote rows remain the authoritative snapshot. */
   public async connectNeon(): Promise<void> {
     if (this.neon) return;
-    const connectionString = process.env.NEON_DATABASE_URL?.trim();
+    const tidbUrl = process.env.TIDB_DATABASE_URL?.trim();
+    const connectionString = tidbUrl || process.env.NEON_DATABASE_URL?.trim();
+    const providerName = tidbUrl ? 'TiDB' : 'Neon';
     if (!connectionString) return;
     const pool = new Pool({ connectionString, ssl: true, max: 4, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 15_000 });
     const startedAt = Date.now();
@@ -306,8 +308,9 @@ class DatabaseManager {
       const firstChangeId = Number(changeBounds.first_id);
       const latestChangeId = Number(changeBounds.last_id);
       const localCursorRow = this.sql.prepare("SELECT value FROM cloud_cache_meta WHERE key = 'neon_change_id'").get();
+      const localProviderRow = this.sql.prepare("SELECT value FROM cloud_cache_meta WHERE key = 'cloud_provider'").get();
       const localCursor = localCursorRow ? Number(localCursorRow.value) : null;
-      const cacheCanCatchUp = localCount > 0 && localCursor !== null && Number.isSafeInteger(localCursor)
+      const cacheCanCatchUp = localCount > 0 && localProviderRow?.value === providerName && localCursor !== null && Number.isSafeInteger(localCursor)
         && localCursor <= latestChangeId
         && (localCursor === latestChangeId || firstChangeId === 0 || localCursor >= firstChangeId - 1);
       const pending = this.sql.prepare('SELECT id, op, tbl, k, seq, data FROM turso_outbox ORDER BY id').all() as TursoOutboxOp[];
@@ -358,8 +361,8 @@ class DatabaseManager {
         await this.applyOutboxToLocal(pending);
         await this.reloadFromSqliteYielding();
         this.sql.prepare("INSERT OR REPLACE INTO cloud_cache_meta(key, value) VALUES ('neon_change_id', ?)").run(String(latestChangeId));
-        if (synced.rows) console.log(`[Neon] Mahalliy nusxaga ${synced.rows} yangi/o‘zgargan qator qo‘llandi; eski qatorlar qayta yuklanmadi.`);
-        else console.log('[Neon] Mahalliy nusxa yangiligi tasdiqlandi; bulutdan qatorlar qayta olinmadi.');
+        if (synced.rows) console.log(`[${providerName}] Mahalliy nusxaga ${synced.rows} yangi/o‘zgargan qator qo‘llandi; eski qatorlar qayta yuklanmadi.`);
+        else console.log(`[${providerName}] Mahalliy nusxa yangiligi tasdiqlandi; bulutdan qatorlar qayta olinmadi.`);
       } else {
         this.data = JSON.parse(JSON.stringify(INITIAL_EMPTY_SCHEMA));
         this.index.clear();
@@ -389,7 +392,7 @@ class DatabaseManager {
               if (Date.now() - lastYieldAt >= 25) { await new Promise<void>(resolve => setImmediate(resolve)); lastYieldAt = Date.now(); }
             }
             if (restoredRows > 0 && restoredRows % 50_000 < page.rows.length) {
-              console.log(`[Neon] ${restoredRows} / ${count} qator yuklandi.`);
+              console.log(`[${providerName}] ${restoredRows} / ${count} qator yuklandi.`);
             }
             if (page.rows.length < pageSize) break;
             page = await pool.query('SELECT tbl, k, seq, data FROM distropro_rows WHERE (tbl, k) > ($1, $2) ORDER BY tbl, k LIMIT $3', [lastTable, lastKey, pageSize]);
@@ -410,13 +413,17 @@ class DatabaseManager {
           throw error;
         }
       }
+      // A cache cursor belongs to its original database. In particular, when
+      // moving Neon -> TiDB, rebuild once from the target snapshot instead of
+      // interpreting a cursor from a different change feed.
+      this.sql.prepare("INSERT OR REPLACE INTO cloud_cache_meta(key, value) VALUES ('cloud_provider', ?)").run(providerName);
       this.neon = pool;
       await this.flushTurso();
       this.scheduleTursoFlush();
-      console.log(`[Neon] Ulanish tayyor; ${count} qator ${Date.now() - startedAt} ms da tiklandi.`);
+      console.log(`[${providerName}] Ulanish tayyor; ${count} qator ${Date.now() - startedAt} ms da tiklandi.`);
     } catch (error) {
       await pool.end().catch(() => undefined);
-      throw new Error(`Neon bazasiga ulanish yoki ma’lumotlarni yuklash amalga oshmadi: ${(error as Error).message}`, { cause: error });
+      throw new Error(`${providerName} bazasiga ulanish yoki ma’lumotlarni yuklash amalga oshmadi: ${(error as Error).message}`, { cause: error });
     }
   }
 
@@ -518,7 +525,9 @@ class DatabaseManager {
   /** Wait until every locally committed write has reached Turso. Mutating API responses use this as a durability barrier. */
   public isTursoEnabled(): boolean { return this.turso !== null; }
   public isCloudEnabled(): boolean { return this.turso !== null || this.neon !== null; }
-  public storageProvider(): 'neon' | 'turso' | 'sqlite' { return this.neon ? 'neon' : this.turso ? 'turso' : 'sqlite'; }
+  public storageProvider(): 'tidb' | 'neon' | 'turso' | 'sqlite' {
+    return this.neon ? (process.env.TIDB_DATABASE_URL?.trim() ? 'tidb' : 'neon') : this.turso ? 'turso' : 'sqlite';
+  }
 
   /** Issue a minimal query to wake/verify Neon without reading application data. */
   public async pingNeon(): Promise<void> {
@@ -611,7 +620,12 @@ class DatabaseManager {
       const client: PoolClient = await this.neon!.connect();
       try {
         await client.query('BEGIN');
-        await client.query("SELECT pg_advisory_xact_lock(hashtext('distropro-sync-feed'))");
+        // TiDB's PostgreSQL-compatible Starter does not document PostgreSQL advisory-lock
+        // functions. This service drains a single in-process queue (tursoDrain) and Render
+        // runs one instance, so the transaction remains serialized without this optional lock.
+        if (!process.env.TIDB_DATABASE_URL?.trim()) {
+          await client.query("SELECT pg_advisory_xact_lock(hashtext('distropro-sync-feed'))");
+        }
         let segment: TursoOutboxOp[] = [];
         const flushSegment = async () => {
           if (!segment.length) return;
@@ -619,7 +633,11 @@ class DatabaseManager {
           for (const op of segment) if (op.k !== null) lastByKey.set(`${op.tbl}\u0000${op.k}`, op);
           const final = [...lastByKey.values()].sort((a, b) => a.id - b.id);
           const deletes = final.filter(op => op.op === 'delete');
-          if (deletes.length) await client.query('DELETE FROM distropro_rows d USING unnest($1::text[], $2::text[]) AS x(tbl, k) WHERE d.tbl = x.tbl AND d.k = x.k', [deletes.map(op => op.tbl), deletes.map(op => op.k)]);
+          if (deletes.length && process.env.TIDB_DATABASE_URL?.trim()) {
+            for (const op of deletes) await client.query('DELETE FROM distropro_rows WHERE tbl = $1 AND k = $2', [op.tbl, op.k]);
+          } else if (deletes.length) {
+            await client.query('DELETE FROM distropro_rows d USING unnest($1::text[], $2::text[]) AS x(tbl, k) WHERE d.tbl = x.tbl AND d.k = x.k', [deletes.map(op => op.tbl), deletes.map(op => op.k)]);
+          }
           const upserts = final.filter(op => op.op === 'upsert' && op.k !== null && op.seq !== null && op.data !== null);
           if (upserts.length) {
             const values: unknown[] = [];
